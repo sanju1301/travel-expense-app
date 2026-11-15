@@ -31,12 +31,7 @@ jobs:
           channel: stable
           cache: true
 
-      - name: Show environment versions
-        run: |
-          flutter --version
-          java -version
-
-      - name: Generate Android and Web project files
+      - name: Generate current Flutter platform files
         run: |
           flutter create \
             --platforms=android,web \
@@ -60,21 +55,15 @@ jobs:
           test -s android/app/google-services.json
           jq empty android/app/google-services.json
 
-          PACKAGE_NAME=$(jq -r \
-            '.client[].client_info.android_client_info.package_name' \
+          jq -e \
+            '.client[].client_info.android_client_info.package_name
+             | select(. == "com.sanjay.travel_expense")' \
             android/app/google-services.json \
-            | grep -Fx 'com.sanjay.travel_expense' \
-            || true)
+            > /dev/null
 
-          if [ -z "${PACKAGE_NAME}" ]; then
-            echo "Firebase configuration does not contain:"
-            echo "com.sanjay.travel_expense"
-            exit 1
-          fi
+          echo "Firebase configuration restored."
 
-          echo "Firebase configuration restored successfully."
-
-      - name: Restore Android signing key
+      - name: Restore signing keystore
         env:
           KEYSTORE_DATA: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
         run: |
@@ -88,46 +77,27 @@ jobs:
             > android/app/travel-expense-dev.jks
 
           test -s android/app/travel-expense-dev.jks
+          echo "Signing keystore restored."
 
-          echo "Android signing key restored successfully."
-
-      - name: Verify Android keystore
+      - name: Verify signing keystore
         env:
           KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
           KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
         run: |
-          if [ -z "${KEYSTORE_PASSWORD}" ]; then
-            echo "ANDROID_KEYSTORE_PASSWORD is missing."
-            exit 1
-          fi
-
-          if [ -z "${KEY_ALIAS}" ]; then
-            echo "ANDROID_KEY_ALIAS is missing."
-            exit 1
-          fi
-
           keytool -list -v \
             -keystore android/app/travel-expense-dev.jks \
             -alias "${KEY_ALIAS}" \
             -storepass "${KEYSTORE_PASSWORD}" \
             > keystore-info.txt
 
-          grep -E 'Alias name:|SHA1:|SHA256:' \
-            keystore-info.txt
+          grep -E 'Alias name:|SHA1:|SHA256:' keystore-info.txt
 
-          echo "Android keystore verified successfully."
-
-      - name: Create signing properties
+      - name: Create key properties
         env:
           KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
           KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
           KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
         run: |
-          if [ -z "${KEY_PASSWORD}" ]; then
-            echo "ANDROID_KEY_PASSWORD is missing."
-            exit 1
-          fi
-
           {
             echo "storePassword=${KEYSTORE_PASSWORD}"
             echo "keyPassword=${KEY_PASSWORD}"
@@ -135,57 +105,68 @@ jobs:
             echo "storeFile=travel-expense-dev.jks"
           } > android/key.properties
 
-          test -s android/key.properties
-
-          echo "Signing properties created successfully."
-
       - name: Add Google Services plugin
         run: |
-          python3 -c '
+          python3 <<'PY'
           from pathlib import Path
 
-          path = Path("android/settings.gradle.kts")
-          text = path.read_text(encoding="utf-8")
+          settings = Path("android/settings.gradle.kts")
+          text = settings.read_text(encoding="utf-8")
 
-          plugin = (
-              "    id(\"com.google.gms.google-services\") "
-              "version \"4.4.4\" apply false\n"
-          )
+          if 'id("com.google.gms.google-services")' not in text:
+              marker = "plugins {\n"
+              plugin = (
+                  '    id("com.google.gms.google-services") '
+                  'version "4.4.4" apply false\n'
+              )
 
-          if "com.google.gms.google-services" not in text:
+              if marker not in text:
+                  raise SystemExit(
+                      "plugins block missing in settings.gradle.kts"
+                  )
+
+              text = text.replace(marker, marker + plugin, 1)
+              settings.write_text(text, encoding="utf-8")
+
+          app = Path("android/app/build.gradle.kts")
+          text = app.read_text(encoding="utf-8")
+
+          if 'id("com.google.gms.google-services")' not in text:
               marker = "plugins {\n"
 
               if marker not in text:
                   raise SystemExit(
-                      "plugins block missing from settings.gradle.kts"
+                      "plugins block missing in app build.gradle.kts"
                   )
 
               text = text.replace(
                   marker,
-                  marker + plugin,
+                  marker
+                  + '    id("com.google.gms.google-services")\n',
                   1,
               )
 
-          path.write_text(text, encoding="utf-8")
-          '
+              app.write_text(text, encoding="utf-8")
 
-          grep -n \
-            'com.google.gms.google-services' \
-            android/settings.gradle.kts
+          print("Google Services plugin added.")
+          PY
 
-      - name: Configure Android application
+      - name: Configure signing without replacing Gradle file
         run: |
-          cat > android/app/build.gradle.kts <<'GRADLE'
-          import java.io.FileInputStream
-          import java.util.Properties
+          python3 <<'PY'
+          from pathlib import Path
 
-          plugins {
-              id("com.android.application")
-              id("kotlin-android")
-              id("dev.flutter.flutter-gradle-plugin")
-              id("com.google.gms.google-services")
-          }
+          path = Path("android/app/build.gradle.kts")
+          text = path.read_text(encoding="utf-8")
 
+          if "import java.util.Properties" not in text:
+              text = (
+                  "import java.io.FileInputStream\n"
+                  "import java.util.Properties\n\n"
+                  + text
+              )
+
+          loader = '''
           val keystoreProperties = Properties()
           val keystorePropertiesFile =
               rootProject.file("key.properties")
@@ -196,28 +177,23 @@ jobs:
               )
           }
 
-          android {
-              namespace = "com.sanjay.travel_expense"
-              compileSdk = flutter.compileSdkVersion
-              ndkVersion = flutter.ndkVersion
+          '''
 
-              compileOptions {
-                  sourceCompatibility = JavaVersion.VERSION_17
-                  targetCompatibility = JavaVersion.VERSION_17
-              }
+          if "val keystoreProperties = Properties()" not in text:
+              marker = "android {\n"
 
-              kotlinOptions {
-                  jvmTarget = JavaVersion.VERSION_17.toString()
-              }
+              if marker not in text:
+                  raise SystemExit(
+                      "android block missing in app build.gradle.kts"
+                  )
 
-              defaultConfig {
-                  applicationId = "com.sanjay.travel_expense"
-                  minSdk = flutter.minSdkVersion
-                  targetSdk = flutter.targetSdkVersion
-                  versionCode = flutter.versionCode
-                  versionName = flutter.versionName
-              }
+              text = text.replace(
+                  marker,
+                  loader + marker,
+                  1,
+              )
 
+          signing = '''
               signingConfigs {
                   create("release") {
                       keyAlias =
@@ -235,31 +211,54 @@ jobs:
                   }
               }
 
-              buildTypes {
-                  getByName("release") {
-                      signingConfig =
-                          signingConfigs.getByName("release")
+          '''
 
-                      isMinifyEnabled = false
-                      isShrinkResources = false
-                  }
-              }
-          }
+          if 'create("release")' not in text:
+              marker = "    buildTypes {\n"
 
-          flutter {
-              source = "../.."
-          }
-          GRADLE
+              if marker not in text:
+                  raise SystemExit(
+                      "buildTypes block missing in app build.gradle.kts"
+                  )
 
-          grep -n \
-            'com.google.gms.google-services' \
-            android/app/build.gradle.kts
+              text = text.replace(
+                  marker,
+                  signing + marker,
+                  1,
+              )
 
-          grep -n \
-            'signingConfigs.getByName("release")' \
-            android/app/build.gradle.kts
+          debug_line = (
+              'signingConfig = '
+              'signingConfigs.getByName("debug")'
+          )
 
-          echo "Android application configured successfully."
+          release_line = (
+              'signingConfig = '
+              'signingConfigs.getByName("release")'
+          )
+
+          if debug_line in text:
+              text = text.replace(
+                  debug_line,
+                  release_line,
+              )
+          elif release_line not in text:
+              marker = 'getByName("release") {\n'
+
+              if marker not in text:
+                  raise SystemExit(
+                      "release build type missing."
+                  )
+
+              text = text.replace(
+                  marker,
+                  marker + "            " + release_line + "\n",
+                  1,
+              )
+
+          path.write_text(text, encoding="utf-8")
+          print("Release signing added.")
+          PY
 
       - name: Install Flutter dependencies
         run: flutter pub get
@@ -270,7 +269,7 @@ jobs:
       - name: Run tests
         run: flutter test
 
-      - name: Display registered certificate fingerprints
+      - name: Display registered certificate
         env:
           KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
           KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
@@ -284,18 +283,12 @@ jobs:
       - name: Build signed release APK
         run: flutter build apk --release
 
-      - name: Confirm release APK
+      - name: Confirm APK exists
         run: |
-          APK_PATH="build/app/outputs/flutter-apk/app-release.apk"
+          test -s build/app/outputs/flutter-apk/app-release.apk
+          ls -lh build/app/outputs/flutter-apk/app-release.apk
 
-          if [ ! -s "${APK_PATH}" ]; then
-            echo "app-release.apk was not produced."
-            exit 1
-          fi
-
-          ls -lh "${APK_PATH}"
-
-      - name: Find APK signer
+      - name: Verify APK certificate
         run: |
           BUILD_TOOLS_VERSION=$(
             ls "${ANDROID_HOME}/build-tools" \
@@ -303,27 +296,17 @@ jobs:
               | tail -1
           )
 
-          APKSIGNER_PATH="${ANDROID_HOME}/build-tools/${BUILD_TOOLS_VERSION}/apksigner"
+          APKSIGNER="${ANDROID_HOME}/build-tools/${BUILD_TOOLS_VERSION}/apksigner"
 
-          if [ ! -x "${APKSIGNER_PATH}" ]; then
-            echo "Android apksigner was not found."
-            exit 1
-          fi
-
-          echo "APKSIGNER_PATH=${APKSIGNER_PATH}" \
-            >> "${GITHUB_ENV}"
-
-      - name: Verify completed APK certificate
-        run: |
-          "${APKSIGNER_PATH}" verify \
+          "${APKSIGNER}" verify \
             --verbose \
             --print-certs \
             build/app/outputs/flutter-apk/app-release.apk
 
-      - name: Upload signed release APK
+      - name: Upload signed APK
         uses: actions/upload-artifact@v4
         with:
-          name: travel-expense-auth-trips-release-apk
+          name: travel-expense-auth-release-apk
           path: build/app/outputs/flutter-apk/app-release.apk
           if-no-files-found: error
           retention-days: 14
