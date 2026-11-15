@@ -59,6 +59,12 @@ jobs:
       - run: flutter pub get
       - run: flutter analyze --no-fatal-infos
       - run: flutter build web --release
+      - name: Add announcement and branded icons
+        run: |
+          mkdir -p build/web/config build/web/icons
+          cp config/announcement.json build/web/config/announcement.json
+          cp web/favicon.png build/web/favicon.png
+          cp web/icons/* build/web/icons/
       - uses: actions/upload-artifact@v4
         with:
           name: travel-expense-web
