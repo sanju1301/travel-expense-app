@@ -7,14 +7,14 @@ import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import 'package:google_sign_in/google_sign_in.dart';
 import 'package:image_picker/image_picker.dart';
-import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:supabase_flutter/supabase_flutter.dart' hide User;
 import 'supabase_config.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   await Firebase.initializeApp();
   await GoogleSignIn.instance.initialize();
-  await Supabase.initialize(url: supabaseUrl, anonKey: supabasePublishableKey, accessToken: () async => FirebaseAuth.instance.currentUser?.getIdToken());
+  await Supabase.initialize(url: supabaseUrl, publishableKey: supabasePublishableKey, accessToken: () async => FirebaseAuth.instance.currentUser?.getIdToken());
   runApp(const ExpenseApp());
 }
 
