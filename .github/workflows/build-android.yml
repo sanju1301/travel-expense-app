@@ -13,7 +13,7 @@ jobs:
   build:
     name: Build signed release APK
     runs-on: ubuntu-latest
-    timeout-minutes: 40
+    timeout-minutes: 45
 
     steps:
       - name: Checkout repository
@@ -31,6 +31,11 @@ jobs:
           channel: stable
           cache: true
 
+      - name: Show environment versions
+        run: |
+          flutter --version
+          java -version
+
       - name: Generate current Flutter platform files
         run: |
           flutter create \
@@ -44,7 +49,7 @@ jobs:
           FIREBASE_JSON: ${{ secrets.GOOGLE_SERVICES_JSON_BASE64 }}
         run: |
           if [ -z "${FIREBASE_JSON}" ]; then
-            echo "GOOGLE_SERVICES_JSON_BASE64 is missing."
+            echo "GOOGLE_SERVICES_JSON_BASE64 secret is missing."
             exit 1
           fi
 
@@ -52,7 +57,11 @@ jobs:
             | base64 --decode \
             > android/app/google-services.json
 
-          test -s android/app/google-services.json
+          if [ ! -s android/app/google-services.json ]; then
+            echo "google-services.json was not restored."
+            exit 1
+          fi
+
           jq empty android/app/google-services.json
 
           jq -e \
@@ -61,14 +70,14 @@ jobs:
             android/app/google-services.json \
             > /dev/null
 
-          echo "Firebase configuration restored."
+          echo "Firebase configuration restored successfully."
 
-      - name: Restore signing keystore
+      - name: Restore Android signing key
         env:
           KEYSTORE_DATA: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
         run: |
           if [ -z "${KEYSTORE_DATA}" ]; then
-            echo "ANDROID_KEYSTORE_BASE64 is missing."
+            echo "ANDROID_KEYSTORE_BASE64 secret is missing."
             exit 1
           fi
 
@@ -76,28 +85,50 @@ jobs:
             | base64 --decode \
             > android/app/travel-expense-dev.jks
 
-          test -s android/app/travel-expense-dev.jks
-          echo "Signing keystore restored."
+          if [ ! -s android/app/travel-expense-dev.jks ]; then
+            echo "Android signing keystore was not restored."
+            exit 1
+          fi
 
-      - name: Verify signing keystore
+          echo "Android signing keystore restored successfully."
+
+      - name: Verify Android signing key
         env:
           KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
           KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
         run: |
+          if [ -z "${KEYSTORE_PASSWORD}" ]; then
+            echo "ANDROID_KEYSTORE_PASSWORD secret is missing."
+            exit 1
+          fi
+
+          if [ -z "${KEY_ALIAS}" ]; then
+            echo "ANDROID_KEY_ALIAS secret is missing."
+            exit 1
+          fi
+
           keytool -list -v \
             -keystore android/app/travel-expense-dev.jks \
             -alias "${KEY_ALIAS}" \
             -storepass "${KEYSTORE_PASSWORD}" \
             > keystore-info.txt
 
-          grep -E 'Alias name:|SHA1:|SHA256:' keystore-info.txt
+          grep -E 'Alias name:|SHA1:|SHA256:' \
+            keystore-info.txt
 
-      - name: Create key properties
+          echo "Android signing key verified successfully."
+
+      - name: Create Android signing properties
         env:
           KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
           KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
           KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
         run: |
+          if [ -z "${KEY_PASSWORD}" ]; then
+            echo "ANDROID_KEY_PASSWORD secret is missing."
+            exit 1
+          fi
+
           {
             echo "storePassword=${KEYSTORE_PASSWORD}"
             echo "keyPassword=${KEY_PASSWORD}"
@@ -105,55 +136,85 @@ jobs:
             echo "storeFile=travel-expense-dev.jks"
           } > android/key.properties
 
-      - name: Add Google Services plugin
+          test -s android/key.properties
+
+          echo "Android signing properties created."
+
+      - name: Configure Google Services plugin
         run: |
-          python3 <<'PY'
+          cat > /tmp/add_google_services.py <<'PY'
           from pathlib import Path
 
-          settings = Path("android/settings.gradle.kts")
-          text = settings.read_text(encoding="utf-8")
+          settings_path = Path("android/settings.gradle.kts")
+          settings_text = settings_path.read_text(
+              encoding="utf-8"
+          )
 
-          if 'id("com.google.gms.google-services")' not in text:
+          plugin_id = 'id("com.google.gms.google-services")'
+
+          if plugin_id not in settings_text:
               marker = "plugins {\n"
               plugin = (
                   '    id("com.google.gms.google-services") '
                   'version "4.4.4" apply false\n'
               )
 
-              if marker not in text:
+              if marker not in settings_text:
                   raise SystemExit(
-                      "plugins block missing in settings.gradle.kts"
+                      "plugins block was not found in "
+                      "android/settings.gradle.kts"
                   )
 
-              text = text.replace(marker, marker + plugin, 1)
-              settings.write_text(text, encoding="utf-8")
-
-          app = Path("android/app/build.gradle.kts")
-          text = app.read_text(encoding="utf-8")
-
-          if 'id("com.google.gms.google-services")' not in text:
-              marker = "plugins {\n"
-
-              if marker not in text:
-                  raise SystemExit(
-                      "plugins block missing in app build.gradle.kts"
-                  )
-
-              text = text.replace(
+              settings_text = settings_text.replace(
                   marker,
-                  marker
-                  + '    id("com.google.gms.google-services")\n',
+                  marker + plugin,
                   1,
               )
 
-              app.write_text(text, encoding="utf-8")
+              settings_path.write_text(
+                  settings_text,
+                  encoding="utf-8",
+              )
 
-          print("Google Services plugin added.")
+          app_path = Path("android/app/build.gradle.kts")
+          app_text = app_path.read_text(encoding="utf-8")
+
+          if plugin_id not in app_text:
+              marker = "plugins {\n"
+
+              if marker not in app_text:
+                  raise SystemExit(
+                      "plugins block was not found in "
+                      "android/app/build.gradle.kts"
+                  )
+
+              app_text = app_text.replace(
+                  marker,
+                  marker + "    " + plugin_id + "\n",
+                  1,
+              )
+
+              app_path.write_text(
+                  app_text,
+                  encoding="utf-8",
+              )
+
+          print("Google Services plugin configured.")
           PY
 
-      - name: Configure signing without replacing Gradle file
+          python3 /tmp/add_google_services.py
+
+          grep -n \
+            'com.google.gms.google-services' \
+            android/settings.gradle.kts
+
+          grep -n \
+            'com.google.gms.google-services' \
+            android/app/build.gradle.kts
+
+      - name: Configure permanent release signing
         run: |
-          python3 <<'PY'
+          cat > /tmp/add_release_signing.py <<'PY'
           from pathlib import Path
 
           path = Path("android/app/build.gradle.kts")
@@ -166,7 +227,7 @@ jobs:
                   + text
               )
 
-          loader = '''
+          loader = """
           val keystoreProperties = Properties()
           val keystorePropertiesFile =
               rootProject.file("key.properties")
@@ -177,14 +238,15 @@ jobs:
               )
           }
 
-          '''
+          """
 
           if "val keystoreProperties = Properties()" not in text:
               marker = "android {\n"
 
               if marker not in text:
                   raise SystemExit(
-                      "android block missing in app build.gradle.kts"
+                      "android block was not found in "
+                      "android/app/build.gradle.kts"
                   )
 
               text = text.replace(
@@ -193,7 +255,7 @@ jobs:
                   1,
               )
 
-          signing = '''
+          signing_config = """
               signingConfigs {
                   create("release") {
                       keyAlias =
@@ -211,65 +273,81 @@ jobs:
                   }
               }
 
-          '''
+          """
 
           if 'create("release")' not in text:
               marker = "    buildTypes {\n"
 
               if marker not in text:
                   raise SystemExit(
-                      "buildTypes block missing in app build.gradle.kts"
+                      "buildTypes block was not found in "
+                      "android/app/build.gradle.kts"
                   )
 
               text = text.replace(
                   marker,
-                  signing + marker,
+                  signing_config + marker,
                   1,
               )
 
-          debug_line = (
+          debug_signing = (
               'signingConfig = '
               'signingConfigs.getByName("debug")'
           )
 
-          release_line = (
+          release_signing = (
               'signingConfig = '
               'signingConfigs.getByName("release")'
           )
 
-          if debug_line in text:
+          if debug_signing in text:
               text = text.replace(
-                  debug_line,
-                  release_line,
+                  debug_signing,
+                  release_signing,
               )
-          elif release_line not in text:
+
+          if release_signing not in text:
               marker = 'getByName("release") {\n'
 
               if marker not in text:
                   raise SystemExit(
-                      "release build type missing."
+                      "release build type was not found in "
+                      "android/app/build.gradle.kts"
                   )
 
               text = text.replace(
                   marker,
-                  marker + "            " + release_line + "\n",
+                  marker
+                  + "            "
+                  + release_signing
+                  + "\n",
                   1,
               )
 
           path.write_text(text, encoding="utf-8")
-          print("Release signing added.")
+          print("Permanent release signing configured.")
           PY
+
+          python3 /tmp/add_release_signing.py
+
+          grep -n \
+            'create("release")' \
+            android/app/build.gradle.kts
+
+          grep -n \
+            'signingConfigs.getByName("release")' \
+            android/app/build.gradle.kts
 
       - name: Install Flutter dependencies
         run: flutter pub get
 
-      - name: Analyze project
+      - name: Analyze Flutter project
         run: flutter analyze --no-fatal-infos
 
-      - name: Run tests
+      - name: Run Flutter tests
         run: flutter test
 
-      - name: Display registered certificate
+      - name: Display registered certificate fingerprints
         env:
           KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
           KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
@@ -281,14 +359,43 @@ jobs:
             | grep -E 'SHA1:|SHA256:'
 
       - name: Build signed release APK
-        run: flutter build apk --release
-
-      - name: Confirm APK exists
         run: |
-          test -s build/app/outputs/flutter-apk/app-release.apk
-          ls -lh build/app/outputs/flutter-apk/app-release.apk
+          cd android
 
-      - name: Verify APK certificate
+          ./gradlew assembleRelease \
+            -x lintVitalAnalyzeRelease \
+            --no-daemon
+
+          cd ..
+
+      - name: Locate signed release APK
+        run: |
+          APK_PATH=$(
+            find . \
+              -type f \
+              -name "app-release.apk" \
+              | head -1
+          )
+
+          if [ -z "${APK_PATH}" ]; then
+            echo "app-release.apk was not found."
+            exit 1
+          fi
+
+          if [ ! -s "${APK_PATH}" ]; then
+            echo "app-release.apk is empty."
+            exit 1
+          fi
+
+          echo "APK_PATH=${APK_PATH}" \
+            >> "${GITHUB_ENV}"
+
+          echo "Release APK found at:"
+          echo "${APK_PATH}"
+
+          ls -lh "${APK_PATH}"
+
+      - name: Verify completed APK certificate
         run: |
           BUILD_TOOLS_VERSION=$(
             ls "${ANDROID_HOME}/build-tools" \
@@ -296,17 +403,26 @@ jobs:
               | tail -1
           )
 
-          APKSIGNER="${ANDROID_HOME}/build-tools/${BUILD_TOOLS_VERSION}/apksigner"
+          APKSIGNER=$(
+            printf '%s' \
+              "${ANDROID_HOME}/build-tools/"\
+              "${BUILD_TOOLS_VERSION}/apksigner"
+          )
+
+          if [ ! -x "${APKSIGNER}" ]; then
+            echo "Android apksigner was not found."
+            exit 1
+          fi
 
           "${APKSIGNER}" verify \
             --verbose \
             --print-certs \
-            build/app/outputs/flutter-apk/app-release.apk
+            "${APK_PATH}"
 
-      - name: Upload signed APK
+      - name: Upload signed release APK
         uses: actions/upload-artifact@v4
         with:
           name: travel-expense-auth-release-apk
-          path: build/app/outputs/flutter-apk/app-release.apk
+          path: ${{ env.APK_PATH }}
           if-no-files-found: error
           retention-days: 14
