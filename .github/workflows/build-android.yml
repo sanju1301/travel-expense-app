@@ -2,9 +2,15 @@ name: Build Android APK
 
 on:
   workflow_dispatch:
+
   push:
     branches:
       - main
+    paths:
+      - "lib/**"
+      - "assets/**"
+      - "pubspec.yaml"
+      - ".github/workflows/build-android.yml"
 
 permissions:
   contents: read
@@ -298,6 +304,12 @@ jobs:
 
       - name: Install Flutter dependencies
         run: flutter pub get
+
+      - name: Generate Android launcher icons
+        run: |
+          test -f assets/icon/travel_expense_icon_1024.png
+          dart run flutter_launcher_icons
+
 
       - name: Analyze Flutter project
         run: flutter analyze --no-fatal-infos
