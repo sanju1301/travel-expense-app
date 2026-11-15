@@ -4,7 +4,11 @@ import 'package:travel_expense/main.dart';
 void main() {
   testWidgets('shows dashboard shell', (tester) async {
     await tester.pumpWidget(const TravelExpenseApp());
-    expect(find.text('Good afternoon'), findsOneWidget);
+    await tester.pumpAndSettle();
+
+    expect(find.text('Good afternoon'), findsWidgets);
+    expect(find.text('Expenses'), findsWidgets);
     expect(find.text('Add'), findsOneWidget);
+    expect(find.text('Profile'), findsWidgets);
   });
 }
