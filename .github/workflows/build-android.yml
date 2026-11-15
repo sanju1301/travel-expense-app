@@ -31,7 +31,7 @@ jobs:
           channel: stable
           cache: true
 
-      - name: Show build environment
+      - name: Show Flutter and Java versions
         run: |
           flutter --version
           java -version
@@ -53,22 +53,69 @@ jobs:
             exit 1
           fi
 
-          echo "$GOOGLE_SERVICES_JSON_BASE64" \
+          printf '%s' "$GOOGLE_SERVICES_JSON_BASE64" \
             | base64 --decode \
             > android/app/google-services.json
 
-          test -s android/app/google-services.json
+          if [ ! -s android/app/google-services.json ]; then
+            echo "google-services.json was not restored."
+            exit 1
+          fi
 
-          python3 - <<'PY'
-          import json
-          from pathlib import Path
+          jq empty android/app/google-services.json
 
-          path = Path("android/app/google-services.json")
-          data = json.loads(path.read_text())
+          PACKAGE_FOUND=$(jq -r \
+            '.client[].client_info.android_client_info.package_name' \
+            android/app/google-services.json \
+            | grep -Fx "com.sanjay.travel_expense" || true)
 
-          package_names = [
-              client.get("client_info", {})
-              .get("android_client_info", {})
-              .get("package_name")
-              for client in data.get("client", [])
-  
+          if [ -z "$PACKAGE_FOUND" ]; then
+            echo "google-services.json does not contain:"
+            echo "com.sanjay.travel_expense"
+            exit 1
+          fi
+
+          echo "Firebase configuration restored successfully."
+
+      - name: Restore Android signing key
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+        run: |
+          if [ -z "$ANDROID_KEYSTORE_BASE64" ]; then
+            echo "ANDROID_KEYSTORE_BASE64 secret is missing."
+            exit 1
+          fi
+
+          printf '%s' "$ANDROID_KEYSTORE_BASE64" \
+            | base64 --decode \
+            > android/app/travel-expense-dev.jks
+
+          if [ ! -s android/app/travel-expense-dev.jks ]; then
+            echo "Android signing keystore was not restored."
+            exit 1
+          fi
+
+          echo "Android signing key restored successfully."
+
+      - name: Verify Android keystore
+        env:
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+        run: |
+          if [ -z "$ANDROID_KEYSTORE_PASSWORD" ]; then
+            echo "ANDROID_KEYSTORE_PASSWORD secret is missing."
+            exit 1
+          fi
+
+          if [ -z "$ANDROID_KEY_ALIAS" ]; then
+            echo "ANDROID_KEY_ALIAS secret is missing."
+            exit 1
+          fi
+
+          keytool -list \
+            -keystore android/app/travel-expense-dev.jks \
+            -alias "$ANDROID_KEY_ALIAS" \
+            -storepass "$ANDROID_KEYSTORE_PASSWORD" \
+            > /dev/null
+
+          echo "Android keystore and alias are valid
