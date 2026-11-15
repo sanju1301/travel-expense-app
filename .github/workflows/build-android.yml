@@ -44,6 +44,29 @@ jobs:
             --project-name travel_expense \
             .
 
+      - name: Create Supabase client configuration
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_PUBLISHABLE_KEY: ${{ secrets.SUPABASE_PUBLISHABLE_KEY }}
+        run: |
+          if [ -z "${SUPABASE_URL}" ]; then
+            echo "SUPABASE_URL secret is missing."
+            exit 1
+          fi
+
+          if [ -z "${SUPABASE_PUBLISHABLE_KEY}" ]; then
+            echo "SUPABASE_PUBLISHABLE_KEY secret is missing."
+            exit 1
+          fi
+
+          printf "const supabaseUrl = '%s';\nconst supabasePublishableKey = '%s';\n" \
+            "${SUPABASE_URL}" \
+            "${SUPABASE_PUBLISHABLE_KEY}" \
+            > lib/supabase_config.dart
+
+          test -s lib/supabase_config.dart
+          echo "Supabase client configuration created."
+
       - name: Restore Firebase configuration
         env:
           FIREBASE_JSON: ${{ secrets.GOOGLE_SERVICES_JSON_BASE64 }}
@@ -113,9 +136,7 @@ jobs:
             -storepass "${KEYSTORE_PASSWORD}" \
             > keystore-info.txt
 
-          grep -E 'Alias name:|SHA1:|SHA256:' \
-            keystore-info.txt
-
+          grep -E 'Alias name:|SHA1:|SHA256:' keystore-info.txt
           echo "Android signing key verified successfully."
 
       - name: Create Android signing properties
@@ -137,7 +158,6 @@ jobs:
           } > android/key.properties
 
           test -s android/key.properties
-
           echo "Android signing properties created."
 
       - name: Configure Google Services plugin
@@ -146,10 +166,7 @@ jobs:
           from pathlib import Path
 
           settings_path = Path("android/settings.gradle.kts")
-          settings_text = settings_path.read_text(
-              encoding="utf-8"
-          )
-
+          settings_text = settings_path.read_text(encoding="utf-8")
           plugin_id = 'id("com.google.gms.google-services")'
 
           if plugin_id not in settings_text:
@@ -158,59 +175,35 @@ jobs:
                   '    id("com.google.gms.google-services") '
                   'version "4.4.4" apply false\n'
               )
-
               if marker not in settings_text:
                   raise SystemExit(
-                      "plugins block was not found in "
-                      "android/settings.gradle.kts"
+                      "plugins block was not found in android/settings.gradle.kts"
                   )
-
-              settings_text = settings_text.replace(
-                  marker,
-                  marker + plugin,
-                  1,
-              )
-
-              settings_path.write_text(
-                  settings_text,
-                  encoding="utf-8",
-              )
+              settings_text = settings_text.replace(marker, marker + plugin, 1)
+              settings_path.write_text(settings_text, encoding="utf-8")
 
           app_path = Path("android/app/build.gradle.kts")
           app_text = app_path.read_text(encoding="utf-8")
 
           if plugin_id not in app_text:
               marker = "plugins {\n"
-
               if marker not in app_text:
                   raise SystemExit(
-                      "plugins block was not found in "
-                      "android/app/build.gradle.kts"
+                      "plugins block was not found in android/app/build.gradle.kts"
                   )
-
               app_text = app_text.replace(
                   marker,
                   marker + "    " + plugin_id + "\n",
                   1,
               )
-
-              app_path.write_text(
-                  app_text,
-                  encoding="utf-8",
-              )
+              app_path.write_text(app_text, encoding="utf-8")
 
           print("Google Services plugin configured.")
           PY
 
           python3 /tmp/add_google_services.py
-
-          grep -n \
-            'com.google.gms.google-services' \
-            android/settings.gradle.kts
-
-          grep -n \
-            'com.google.gms.google-services' \
-            android/app/build.gradle.kts
+          grep -n 'com.google.gms.google-services' android/settings.gradle.kts
+          grep -n 'com.google.gms.google-services' android/app/build.gradle.kts
 
       - name: Configure permanent release signing
         run: |
@@ -242,32 +235,22 @@ jobs:
 
           if "val keystoreProperties = Properties()" not in text:
               marker = "android {\n"
-
               if marker not in text:
                   raise SystemExit(
-                      "android block was not found in "
-                      "android/app/build.gradle.kts"
+                      "android block was not found in android/app/build.gradle.kts"
                   )
-
-              text = text.replace(
-                  marker,
-                  loader + marker,
-                  1,
-              )
+              text = text.replace(marker, loader + marker, 1)
 
           signing_config = """
               signingConfigs {
                   create("release") {
                       keyAlias =
                           keystoreProperties["keyAlias"] as String
-
                       keyPassword =
                           keystoreProperties["keyPassword"] as String
-
                       storeFile = file(
                           keystoreProperties["storeFile"] as String
                       )
-
                       storePassword =
                           keystoreProperties["storePassword"] as String
                   }
@@ -277,50 +260,31 @@ jobs:
 
           if 'create("release")' not in text:
               marker = "    buildTypes {\n"
-
               if marker not in text:
                   raise SystemExit(
-                      "buildTypes block was not found in "
-                      "android/app/build.gradle.kts"
+                      "buildTypes block was not found in android/app/build.gradle.kts"
                   )
-
-              text = text.replace(
-                  marker,
-                  signing_config + marker,
-                  1,
-              )
+              text = text.replace(marker, signing_config + marker, 1)
 
           debug_signing = (
-              'signingConfig = '
-              'signingConfigs.getByName("debug")'
+              'signingConfig = signingConfigs.getByName("debug")'
           )
-
           release_signing = (
-              'signingConfig = '
-              'signingConfigs.getByName("release")'
+              'signingConfig = signingConfigs.getByName("release")'
           )
 
           if debug_signing in text:
-              text = text.replace(
-                  debug_signing,
-                  release_signing,
-              )
+              text = text.replace(debug_signing, release_signing)
 
           if release_signing not in text:
               marker = 'getByName("release") {\n'
-
               if marker not in text:
                   raise SystemExit(
-                      "release build type was not found in "
-                      "android/app/build.gradle.kts"
+                      "release build type was not found in android/app/build.gradle.kts"
                   )
-
               text = text.replace(
                   marker,
-                  marker
-                  + "            "
-                  + release_signing
-                  + "\n",
+                  marker + "            " + release_signing + "\n",
                   1,
               )
 
@@ -329,14 +293,8 @@ jobs:
           PY
 
           python3 /tmp/add_release_signing.py
-
-          grep -n \
-            'create("release")' \
-            android/app/build.gradle.kts
-
-          grep -n \
-            'signingConfigs.getByName("release")' \
-            android/app/build.gradle.kts
+          grep -n 'create("release")' android/app/build.gradle.kts
+          grep -n 'signingConfigs.getByName("release")' android/app/build.gradle.kts
 
       - name: Install Flutter dependencies
         run: flutter pub get
@@ -361,21 +319,14 @@ jobs:
       - name: Build signed release APK
         run: |
           cd android
-
           ./gradlew assembleRelease \
             -x lintVitalAnalyzeRelease \
             --no-daemon
-
           cd ..
 
       - name: Locate signed release APK
         run: |
-          APK_PATH=$(
-            find . \
-              -type f \
-              -name "app-release.apk" \
-              | head -1
-          )
+          APK_PATH=$(find . -type f -name "app-release.apk" | head -1)
 
           if [ -z "${APK_PATH}" ]; then
             echo "app-release.apk was not found."
@@ -387,27 +338,14 @@ jobs:
             exit 1
           fi
 
-          echo "APK_PATH=${APK_PATH}" \
-            >> "${GITHUB_ENV}"
-
-          echo "Release APK found at:"
-          echo "${APK_PATH}"
-
+          echo "APK_PATH=${APK_PATH}" >> "${GITHUB_ENV}"
+          echo "Release APK found at: ${APK_PATH}"
           ls -lh "${APK_PATH}"
 
       - name: Verify completed APK certificate
         run: |
-          BUILD_TOOLS_VERSION=$(
-            ls "${ANDROID_HOME}/build-tools" \
-              | sort -V \
-              | tail -1
-          )
-
-          APKSIGNER=$(
-            printf '%s' \
-              "${ANDROID_HOME}/build-tools/"\
-              "${BUILD_TOOLS_VERSION}/apksigner"
-          )
+          BUILD_TOOLS_VERSION=$(ls "${ANDROID_HOME}/build-tools" | sort -V | tail -1)
+          APKSIGNER="${ANDROID_HOME}/build-tools/${BUILD_TOOLS_VERSION}/apksigner"
 
           if [ ! -x "${APKSIGNER}" ]; then
             echo "Android apksigner was not found."
