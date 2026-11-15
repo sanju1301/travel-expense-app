@@ -117,8 +117,16 @@ class GlassCard extends StatelessWidget {
 class Trip { const Trip(this.id,this.name,this.place,this.dates,this.total,this.count,this.active); final String id,name,place,dates,total; final int count; final bool active;
   factory Trip.fromDoc(DocumentSnapshot<Map<String,dynamic>> doc) { final d=doc.data()??{}; return Trip(doc.id,(d['name']??'Untitled trip').toString(),(d['destination']??'').toString(),(d['dateLabel']??'Dates not set').toString(),(d['totalLabel']??'No expenses').toString(),(d['billCount'] as num?)?.toInt()??0,(d['status']??'active')=='active'); }
 }
-class Bill { const Bill(this.name,this.meta,this.amount,this.color); final String name,meta,amount; final Color color; }
-const bills=[Bill('Grand Business Hotel','Hotel - 15 Nov','Rs 8,950',Color(0xff324c72)),Bill('City Taxi','Transport - 15 Nov','Rs 1,280',Color(0xff294b41)),Bill('Restaurant','Meals - 16 Nov','Rs 845',Color(0xff5a3d52))];
+class Bill {
+  const Bill(this.id,this.tripId,this.merchant,this.category,this.amountMinor,this.currency,this.dateLabel,this.notes);
+  final String id,tripId,merchant,category,currency,dateLabel,notes;
+  final int amountMinor;
+  String get amountLabel => '$currency ${(amountMinor/100).toStringAsFixed(2)}';
+  factory Bill.fromDoc(DocumentSnapshot<Map<String,dynamic>> doc,String tripId){
+    final d=doc.data()??{};
+    return Bill(doc.id,tripId,(d['merchant']??'Untitled bill').toString(),(d['category']??'Other').toString(),(d['amountMinor'] as num?)?.toInt()??0,(d['currency']??'INR').toString(),(d['dateLabel']??'Date not set').toString(),(d['notes']??'').toString());
+  }
+}
 
 class TripsPage extends StatelessWidget {
   const TripsPage({super.key});
@@ -150,19 +158,59 @@ class TripCard extends StatelessWidget {
 }
 class TripDetailPage extends StatelessWidget {
   const TripDetailPage({required this.trip,super.key}); final Trip trip;
-  @override Widget build(BuildContext context)=>Scaffold(appBar:AppBar(title:Text(trip.name)),floatingActionButton:FloatingActionButton.extended(onPressed:()=>Navigator.push(context,MaterialPageRoute(builder:(_)=>const AddBillPage())),icon:const Icon(CupertinoIcons.camera_fill),label:const Text('Add bill')),body:ListView(padding:const EdgeInsets.fromLTRB(16,8,16,100),children:[
-    GlassCard(child:Column(crossAxisAlignment:CrossAxisAlignment.start,children:[Text(trip.place,style:const TextStyle(color:Colors.white60)),const SizedBox(height:6),Text(trip.total,style:const TextStyle(fontSize:32,fontWeight:FontWeight.w900)),Text('${trip.count} bills - ${trip.dates}',style:const TextStyle(color:Colors.white60))])),const SizedBox(height:22),const Text('Bills',style:TextStyle(fontSize:21,fontWeight:FontWeight.w900)),const SizedBox(height:12),...bills.map((b)=>Padding(padding:const EdgeInsets.only(bottom:10),child:BillTile(bill:b)))
-  ]));
+  @override Widget build(BuildContext context){
+    final uid=FirebaseAuth.instance.currentUser!.uid;
+    final stream=FirebaseFirestore.instance.collection('users').doc(uid).collection('trips').doc(trip.id).collection('bills').orderBy('createdAt',descending:true).snapshots();
+    return Scaffold(
+      appBar:AppBar(title:Text(trip.name)),
+      floatingActionButton:FloatingActionButton.extended(onPressed:()=>Navigator.push(context,MaterialPageRoute(builder:(_)=>AddBillPage(trip:trip))),icon:const Icon(CupertinoIcons.add),label:const Text('Add bill')),
+      body:StreamBuilder<QuerySnapshot<Map<String,dynamic>>>(stream:stream,builder:(context,snap){
+        if(snap.hasError){return Center(child:Padding(padding:const EdgeInsets.all(24),child:Text('Unable to load bills: ${snap.error}',style:const TextStyle(color:Color(0xffff8a8a)))));}
+        if(!snap.hasData){return const Center(child:CupertinoActivityIndicator());}
+        final items=snap.data!.docs.map((d)=>Bill.fromDoc(d,trip.id)).toList();
+        final total=items.fold<int>(0,(sum,b)=>sum+b.amountMinor);
+        final currency=items.isEmpty?'':items.first.currency;
+        return ListView(padding:const EdgeInsets.fromLTRB(16,8,16,100),children:[
+          GlassCard(child:Column(crossAxisAlignment:CrossAxisAlignment.start,children:[Text(trip.place.isEmpty?'No destination':trip.place,style:const TextStyle(color:Colors.white60)),const SizedBox(height:6),Text(items.isEmpty?'No expenses':'$currency ${(total/100).toStringAsFixed(2)}',style:const TextStyle(fontSize:32,fontWeight:FontWeight.w900)),Text('${items.length} bills',style:const TextStyle(color:Colors.white60))])),
+          const SizedBox(height:22),const Text('Bills',style:TextStyle(fontSize:21,fontWeight:FontWeight.w900)),const SizedBox(height:12),
+          if(items.isEmpty) const GlassCard(child:Column(children:[Icon(CupertinoIcons.doc_text,size:44,color:Color(0xff90baff)),SizedBox(height:12),Text('No bills yet',style:TextStyle(fontSize:20,fontWeight:FontWeight.w900)),SizedBox(height:6),Text('Tap Add bill to save the first expense.',style:TextStyle(color:Colors.white60))])) else ...items.map((b)=>Padding(padding:const EdgeInsets.only(bottom:10),child:BillTile(bill:b,trip:trip)))
+        ]);
+      })
+    );
+  }
 }
 class BillTile extends StatelessWidget {
-  const BillTile({required this.bill,super.key});final Bill bill;
-  @override Widget build(BuildContext context)=>InkWell(borderRadius:BorderRadius.circular(20),onTap:()=>Navigator.push(context,MaterialPageRoute(builder:(_)=>BillDetailPage(bill:bill))),child:GlassCard(padding:const EdgeInsets.all(12),child:Row(children:[Container(width:54,height:68,decoration:BoxDecoration(color:bill.color,borderRadius:BorderRadius.circular(12)),child:const Icon(CupertinoIcons.doc_text_viewfinder)),const SizedBox(width:13),Expanded(child:Column(crossAxisAlignment:CrossAxisAlignment.start,children:[Text(bill.name,style:const TextStyle(fontWeight:FontWeight.w900)),Text(bill.meta,style:const TextStyle(color:Colors.white60)),const Text('Synced',style:TextStyle(color:Color(0xff72e7b4),fontSize:12))])),Text(bill.amount,style:const TextStyle(fontWeight:FontWeight.w900)),const Icon(CupertinoIcons.chevron_right,size:14)])));
+  const BillTile({required this.bill,required this.trip,super.key}); final Bill bill; final Trip trip;
+  @override Widget build(BuildContext context)=>InkWell(borderRadius:BorderRadius.circular(20),onTap:()=>Navigator.push(context,MaterialPageRoute(builder:(_)=>BillDetailPage(bill:bill,trip:trip))),child:GlassCard(padding:const EdgeInsets.all(12),child:Row(children:[
+    Container(width:54,height:68,decoration:BoxDecoration(color:const Color(0xff324c72),borderRadius:BorderRadius.circular(12)),child:const Icon(CupertinoIcons.doc_text_viewfinder)),const SizedBox(width:13),
+    Expanded(child:Column(crossAxisAlignment:CrossAxisAlignment.start,children:[Text(bill.merchant,style:const TextStyle(fontWeight:FontWeight.w900)),Text('${bill.category} - ${bill.dateLabel}',style:const TextStyle(color:Colors.white60)),const Text('Synced',style:TextStyle(color:Color(0xff72e7b4),fontSize:12))])),
+    Text(bill.amountLabel,style:const TextStyle(fontWeight:FontWeight.w900)),const SizedBox(width:4),const Icon(CupertinoIcons.chevron_right,size:14)
+  ])));
 }
-class BillDetailPage extends StatelessWidget {
-  const BillDetailPage({required this.bill,super.key});final Bill bill;
-  @override Widget build(BuildContext context)=>Scaffold(appBar:AppBar(title:const Text('Bill details')),body:ListView(padding:const EdgeInsets.all(16),children:[Container(height:300,decoration:BoxDecoration(color:bill.color,borderRadius:BorderRadius.circular(24)),child:const Column(mainAxisAlignment:MainAxisAlignment.center,children:[Icon(CupertinoIcons.doc_text_viewfinder,size:58),SizedBox(height:12),Text('Receipt preview',style:TextStyle(fontWeight:FontWeight.w900)),Text('Camera upload comes next',style:TextStyle(color:Colors.white60))])),const SizedBox(height:18),GlassCard(child:Column(crossAxisAlignment:CrossAxisAlignment.start,children:[Text(bill.name,style:const TextStyle(fontSize:22,fontWeight:FontWeight.w900)),Text(bill.meta,style:const TextStyle(color:Colors.white60)),const SizedBox(height:16),Text(bill.amount,style:const TextStyle(fontSize:32,fontWeight:FontWeight.w900))]))]));
+class BillDetailPage extends StatefulWidget {
+  const BillDetailPage({required this.bill,required this.trip,super.key}); final Bill bill; final Trip trip;
+  @override State<BillDetailPage> createState()=>_BillDetailPageState();
 }
-class BillsPage extends StatelessWidget { const BillsPage({super.key}); @override Widget build(BuildContext context)=>PageList(title:'Recent bills',children:[const TextField(decoration:InputDecoration(hintText:'Search bills',prefixIcon:Icon(CupertinoIcons.search))),const SizedBox(height:18),...bills.map((b)=>Padding(padding:const EdgeInsets.only(bottom:10),child:BillTile(bill:b)))]); }
+class _BillDetailPageState extends State<BillDetailPage>{
+  bool deleting=false;
+  Future<void> deleteBill() async {
+    setState(()=>deleting=true);
+    try{
+      final uid=FirebaseAuth.instance.currentUser!.uid; final db=FirebaseFirestore.instance;
+      final tripRef=db.collection('users').doc(uid).collection('trips').doc(widget.trip.id); final billRef=tripRef.collection('bills').doc(widget.bill.id);
+      await db.runTransaction((tx) async { final snap=await tx.get(tripRef); final d=snap.data()??{}; final count=((d['billCount'] as num?)?.toInt()??1)-1; final total=((d['totalMinor'] as num?)?.toInt()??widget.bill.amountMinor)-widget.bill.amountMinor; tx.delete(billRef); tx.update(tripRef,{'billCount':count<0?0:count,'totalMinor':total<0?0:total,'totalLabel':total<=0?'No expenses':'${widget.bill.currency} ${(total/100).toStringAsFixed(2)}','updatedAt':FieldValue.serverTimestamp()}); });
+      if(mounted) Navigator.pop(context);
+    } on FirebaseException catch(e){if(mounted)ScaffoldMessenger.of(context).showSnackBar(SnackBar(content:Text(e.message??e.code)));} finally{if(mounted)setState(()=>deleting=false);}
+  }
+  @override Widget build(BuildContext context)=>Scaffold(appBar:AppBar(title:const Text('Bill details'),actions:[IconButton(onPressed:deleting?null:deleteBill,icon:const Icon(CupertinoIcons.delete,color:Color(0xffff8a8a)))]),body:ListView(padding:const EdgeInsets.all(16),children:[
+    Container(height:260,decoration:BoxDecoration(color:const Color(0xff324c72),borderRadius:BorderRadius.circular(24)),child:const Column(mainAxisAlignment:MainAxisAlignment.center,children:[Icon(CupertinoIcons.doc_text_viewfinder,size:58),SizedBox(height:12),Text('Receipt photograph',style:TextStyle(fontWeight:FontWeight.w900)),Text('Camera upload is the next build',style:TextStyle(color:Colors.white60))])),const SizedBox(height:18),
+    GlassCard(child:Column(crossAxisAlignment:CrossAxisAlignment.start,children:[Text(widget.bill.merchant,style:const TextStyle(fontSize:22,fontWeight:FontWeight.w900)),const SizedBox(height:5),Text('${widget.bill.category} - ${widget.bill.dateLabel}',style:const TextStyle(color:Colors.white60)),const SizedBox(height:16),Text(widget.bill.amountLabel,style:const TextStyle(fontSize:32,fontWeight:FontWeight.w900)),if(widget.bill.notes.isNotEmpty)...[const SizedBox(height:16),Text(widget.bill.notes)] ]))
+  ]));
+}
+class BillsPage extends StatelessWidget {
+  const BillsPage({super.key});
+  @override Widget build(BuildContext context)=>PageList(title:'Recent bills',children:const [GlassCard(child:Column(children:[Icon(CupertinoIcons.map_fill,size:42,color:Color(0xff90baff)),SizedBox(height:12),Text('Bills are grouped by trip',style:TextStyle(fontSize:20,fontWeight:FontWeight.w900)),SizedBox(height:6),Text('Open a trip to view, add, or delete its bills.',textAlign:TextAlign.center,style:TextStyle(color:Colors.white60))]))]);
+}
 class NewTripPage extends StatefulWidget { const NewTripPage({super.key}); @override State<NewTripPage> createState()=>_NewTripPageState(); }
 class _NewTripPageState extends State<NewTripPage>{
   final name=TextEditingController(); final destination=TextEditingController(); final currency=TextEditingController(text:'INR'); final notes=TextEditingController(); bool saving=false;
@@ -170,5 +218,26 @@ class _NewTripPageState extends State<NewTripPage>{
   Future<void> save() async { if(name.text.trim().isEmpty){ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content:Text('Enter a trip name.')));return;} setState(()=>saving=true); try { final user=FirebaseAuth.instance.currentUser!; final db=FirebaseFirestore.instance; await db.collection('users').doc(user.uid).set({'displayName':user.displayName,'email':user.email,'photoUrl':user.photoURL,'updatedAt':FieldValue.serverTimestamp()},SetOptions(merge:true)); await db.collection('users').doc(user.uid).collection('trips').add({'name':name.text.trim(),'destination':destination.text.trim(),'defaultCurrency':currency.text.trim().toUpperCase().isEmpty?'INR':currency.text.trim().toUpperCase(),'notes':notes.text.trim(),'status':'active','billCount':0,'totalMinor':0,'totalLabel':'No expenses','dateLabel':'Dates not set','createdAt':FieldValue.serverTimestamp(),'updatedAt':FieldValue.serverTimestamp()}); if(mounted) Navigator.pop(context); } on FirebaseException catch(e){if(mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content:Text(e.message??e.code)));} finally {if(mounted)setState(()=>saving=false);} }
   @override Widget build(BuildContext context)=>Scaffold(appBar:AppBar(title:const Text('New trip')),body:ListView(padding:const EdgeInsets.all(16),children:[TextField(controller:name,decoration:const InputDecoration(labelText:'Trip name *',prefixIcon:Icon(CupertinoIcons.map))),const SizedBox(height:14),TextField(controller:destination,decoration:const InputDecoration(labelText:'Destination (optional)',prefixIcon:Icon(CupertinoIcons.location))),const SizedBox(height:14),TextField(controller:currency,decoration:const InputDecoration(labelText:'Default currency',hintText:'INR')),const SizedBox(height:14),TextField(controller:notes,maxLines:4,decoration:const InputDecoration(labelText:'Notes (optional)')),const SizedBox(height:20),FilledButton(onPressed:saving?null:save,child:Padding(padding:const EdgeInsets.symmetric(vertical:16),child:Text(saving?'Creating...':'Create trip')))]));
 }
-class AddBillPage extends StatelessWidget {const AddBillPage({super.key});@override Widget build(BuildContext context)=>PageList(title:'Add bill',children:[Container(height:180,decoration:BoxDecoration(color:Colors.white.withValues(alpha:.06),borderRadius:BorderRadius.circular(22)),child:const Column(mainAxisAlignment:MainAxisAlignment.center,children:[Icon(CupertinoIcons.camera_fill,size:44),Text('Photograph receipt',style:TextStyle(fontWeight:FontWeight.w900)),Text('Camera integration comes next',style:TextStyle(color:Colors.white60))])),const SizedBox(height:16),const TextField(decoration:InputDecoration(labelText:'Merchant')),const SizedBox(height:14),const TextField(keyboardType:TextInputType.number,decoration:InputDecoration(labelText:'Amount')),const SizedBox(height:14),const TextField(decoration:InputDecoration(labelText:'Category'))]);}
+class AddBillPage extends StatefulWidget {
+  const AddBillPage({this.trip,super.key}); final Trip? trip;
+  @override State<AddBillPage> createState()=>_AddBillPageState();
+}
+class _AddBillPageState extends State<AddBillPage>{
+  final merchant=TextEditingController(); final amount=TextEditingController(); final currency=TextEditingController(text:'INR'); final category=TextEditingController(text:'Meals'); final notes=TextEditingController(); bool saving=false;
+  @override void dispose(){merchant.dispose();amount.dispose();currency.dispose();category.dispose();notes.dispose();super.dispose();}
+  Future<void> save() async {
+    if(widget.trip==null){ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content:Text('Open a trip and tap Add bill.')));return;}
+    final value=double.tryParse(amount.text.trim().replaceAll(',','')); if(merchant.text.trim().isEmpty||value==null||value<=0){ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content:Text('Enter a merchant and valid amount.')));return;}
+    setState(()=>saving=true);
+    try{
+      final uid=FirebaseAuth.instance.currentUser!.uid; final db=FirebaseFirestore.instance; final tripRef=db.collection('users').doc(uid).collection('trips').doc(widget.trip!.id); final billRef=tripRef.collection('bills').doc(); final minor=(value*100).round(); final code=currency.text.trim().toUpperCase().isEmpty?'INR':currency.text.trim().toUpperCase();
+      await db.runTransaction((tx) async { final snap=await tx.get(tripRef); final d=snap.data()??{}; final count=(d['billCount'] as num?)?.toInt()??0; final total=(d['totalMinor'] as num?)?.toInt()??0; tx.set(billRef,{'merchant':merchant.text.trim(),'amountMinor':minor,'currency':code,'category':category.text.trim().isEmpty?'Other':category.text.trim(),'notes':notes.text.trim(),'dateLabel':'Today','status':'synced','createdAt':FieldValue.serverTimestamp(),'updatedAt':FieldValue.serverTimestamp()}); final next=total+minor; tx.update(tripRef,{'billCount':count+1,'totalMinor':next,'totalLabel':'$code ${(next/100).toStringAsFixed(2)}','updatedAt':FieldValue.serverTimestamp()}); });
+      if(mounted)Navigator.pop(context);
+    } on FirebaseException catch(e){if(mounted)ScaffoldMessenger.of(context).showSnackBar(SnackBar(content:Text(e.message??e.code)));} finally{if(mounted)setState(()=>saving=false);}
+  }
+  @override Widget build(BuildContext context){
+    if(widget.trip==null){return PageList(title:'Add bill',children:const [GlassCard(child:Column(children:[Icon(CupertinoIcons.map,size:44,color:Color(0xff90baff)),SizedBox(height:12),Text('Choose a trip first',style:TextStyle(fontSize:20,fontWeight:FontWeight.w900)),SizedBox(height:6),Text('Open a trip and tap Add bill so the expense is saved in the correct place.',textAlign:TextAlign.center,style:TextStyle(color:Colors.white60))]))]);}
+    return Scaffold(appBar:AppBar(title:const Text('Add bill')),body:ListView(padding:const EdgeInsets.all(16),children:[Text(widget.trip!.name,style:const TextStyle(color:Color(0xff90baff),fontWeight:FontWeight.w900)),const SizedBox(height:14),Container(height:150,decoration:BoxDecoration(color:Colors.white.withValues(alpha:.06),borderRadius:BorderRadius.circular(22)),child:const Column(mainAxisAlignment:MainAxisAlignment.center,children:[Icon(CupertinoIcons.camera_fill,size:42),SizedBox(height:8),Text('Receipt photograph comes next',style:TextStyle(fontWeight:FontWeight.w900))])),const SizedBox(height:16),TextField(controller:merchant,decoration:const InputDecoration(labelText:'Merchant *')),const SizedBox(height:14),Row(children:[Expanded(flex:2,child:TextField(controller:amount,keyboardType:const TextInputType.numberWithOptions(decimal:true),decoration:const InputDecoration(labelText:'Amount *'))),const SizedBox(width:10),Expanded(child:TextField(controller:currency,decoration:const InputDecoration(labelText:'Currency')))]),const SizedBox(height:14),TextField(controller:category,decoration:const InputDecoration(labelText:'Category')),const SizedBox(height:14),TextField(controller:notes,maxLines:3,decoration:const InputDecoration(labelText:'Notes')),const SizedBox(height:20),FilledButton(onPressed:saving?null:save,child:Padding(padding:const EdgeInsets.symmetric(vertical:16),child:Text(saving?'Saving...':'Save bill')))]));
+  }
+}
 class ProfilePage extends StatelessWidget {const ProfilePage({required this.user,super.key});final User user;Future<void> logout()async{await GoogleSignIn.instance.signOut();await FirebaseAuth.instance.signOut();}@override Widget build(BuildContext context)=>PageList(title:'Profile',children:[GlassCard(child:Row(children:[CircleAvatar(radius:32,backgroundImage:user.photoURL==null?null:NetworkImage(user.photoURL!),child:user.photoURL==null?const Icon(CupertinoIcons.person_fill):null),const SizedBox(width:14),Expanded(child:Column(crossAxisAlignment:CrossAxisAlignment.start,children:[Text(user.displayName??'Google user',style:const TextStyle(fontSize:18,fontWeight:FontWeight.w900)),Text(user.email??'',style:const TextStyle(color:Colors.white60))]))])),const SizedBox(height:18),GlassCard(child:ListTile(onTap:logout,leading:const Icon(CupertinoIcons.square_arrow_right,color:Color(0xffff8a8a)),title:const Text('Sign out',style:TextStyle(color:Color(0xffff8a8a)))))]);}
