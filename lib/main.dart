@@ -1,5 +1,6 @@
 import 'dart:ui';
 import 'dart:typed_data';
+import 'dart:convert';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_core/firebase_core.dart';
@@ -9,6 +10,11 @@ import 'package:flutter/material.dart';
 import 'package:google_sign_in/google_sign_in.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:url_launcher/url_launcher.dart';
+import 'package:http/http.dart' as http;
+import 'package:pdf/pdf.dart';
+import 'package:pdf/widgets.dart' as pw;
+import 'package:printing/printing.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:supabase_flutter/supabase_flutter.dart' hide User;
 import 'supabase_config.dart';
 import 'firebase_web_config.dart';
@@ -108,42 +114,36 @@ class _LoginPageState extends State<LoginPage> {
 
 class HomeShell extends StatefulWidget {
   const HomeShell({required this.user, super.key}); final User user;
-  @override State<HomeShell> createState() => _HomeShellState();
+  @override State<HomeShell> createState()=>_HomeShellState();
 }
-class _HomeShellState extends State<HomeShell> {
-  int index = 0;
-  static const destinations = [
-    NavigationRailDestination(icon:Icon(CupertinoIcons.map),selectedIcon:Icon(CupertinoIcons.map_fill),label:Text('Trips')),
-    NavigationRailDestination(icon:Icon(CupertinoIcons.doc_text),selectedIcon:Icon(CupertinoIcons.doc_text_fill),label:Text('Bills')),
-    NavigationRailDestination(icon:Icon(CupertinoIcons.camera),selectedIcon:Icon(CupertinoIcons.camera_fill),label:Text('Add')),
-    NavigationRailDestination(icon:Icon(CupertinoIcons.person),selectedIcon:Icon(CupertinoIcons.person_fill),label:Text('Profile')),
-  ];
-  @override Widget build(BuildContext context) {
-    final page = switch(index) {0=>const TripsPage(),1=>const BillsPage(),2=>const AddBillPage(),_=>ProfilePage(user:widget.user)};
+class _HomeShellState extends State<HomeShell>{
+  int index=0;
+  static const labels=['Dashboard','Bills','Add bill','Profile','About'];
+  static const icons=[CupertinoIcons.chart_bar_alt_fill,CupertinoIcons.doc_text_fill,CupertinoIcons.camera_fill,CupertinoIcons.person_fill,CupertinoIcons.info_circle_fill];
+  Widget current()=>switch(index){0=>const TripsPage(),1=>const BillsPage(),2=>const AddBillPage(),3=>ProfilePage(user:widget.user),_=>const AboutPage()};
+  @override Widget build(BuildContext context){
     final wide=MediaQuery.sizeOf(context).width>=900;
-    if(wide){
-      return Scaffold(body:Row(children:[
-        SafeArea(child:NavigationRail(extended:MediaQuery.sizeOf(context).width>=1200,backgroundColor:const Color(0xff0d121c),selectedIndex:index,onDestinationSelected:(v)=>setState(()=>index=v),leading:const Padding(padding:EdgeInsets.symmetric(vertical:22),child:Icon(CupertinoIcons.doc_text_viewfinder,size:34,color:Color(0xff78afff))),destinations:destinations)),
-        const VerticalDivider(width:1),
-        Expanded(child:Center(child:ConstrainedBox(constraints:const BoxConstraints(maxWidth:1250),child:KeyedSubtree(key:ValueKey(index),child:page))))
-      ]));
-    }
-    return Scaffold(extendBody:true,body:KeyedSubtree(key:ValueKey(index),child:page),bottomNavigationBar:SafeArea(top:false,child:Padding(padding:const EdgeInsets.fromLTRB(14,0,14,10),child:ClipRRect(borderRadius:BorderRadius.circular(24),child:BackdropFilter(filter:ImageFilter.blur(sigmaX:16,sigmaY:16),child:NavigationBar(backgroundColor:const Color(0xcc121722),selectedIndex:index,onDestinationSelected:(v)=>setState(()=>index=v),destinations:const[
-      NavigationDestination(icon:Icon(CupertinoIcons.map),selectedIcon:Icon(CupertinoIcons.map_fill),label:'Trips'),
-      NavigationDestination(icon:Icon(CupertinoIcons.doc_text),selectedIcon:Icon(CupertinoIcons.doc_text_fill),label:'Bills'),
-      NavigationDestination(icon:Icon(CupertinoIcons.camera),selectedIcon:Icon(CupertinoIcons.camera_fill),label:'Add'),
-      NavigationDestination(icon:Icon(CupertinoIcons.person),selectedIcon:Icon(CupertinoIcons.person_fill),label:'Profile'),
-    ]))))));
+    if(!wide){return Scaffold(extendBody:true,body:current(),bottomNavigationBar:SafeArea(top:false,child:NavigationBar(selectedIndex:index,onDestinationSelected:(v)=>setState(()=>index=v),destinations:List.generate(labels.length,(i)=>NavigationDestination(icon:Icon(icons[i]),label:labels[i])))));}
+    return Scaffold(body:Row(children:[
+      Container(width:270,decoration:const BoxDecoration(color:Color(0xff0b111b),border:Border(right:BorderSide(color:Color(0xff242d3b)))),child:SafeArea(child:Column(children:[
+        Padding(padding:const EdgeInsets.fromLTRB(22,24,22,18),child:Row(children:[Container(width:46,height:46,decoration:BoxDecoration(gradient:const LinearGradient(colors:[Color(0xff4f8cff),Color(0xff8b5cf6)]),borderRadius:BorderRadius.circular(14)),child:const Icon(CupertinoIcons.doc_text_viewfinder)),const SizedBox(width:12),const Expanded(child:Column(crossAxisAlignment:CrossAxisAlignment.start,children:[Text('Travel Expense',style:TextStyle(fontSize:17,fontWeight:FontWeight.w900)),Text('Expense workspace',style:TextStyle(fontSize:12,color:Colors.white54))]))])),
+        const Padding(padding:EdgeInsets.symmetric(horizontal:20),child:Divider()),const SizedBox(height:10),
+        ...List.generate(labels.length,(i)=>Padding(padding:const EdgeInsets.symmetric(horizontal:14,vertical:4),child:Material(color:index==i?const Color(0xff1a2942):Colors.transparent,borderRadius:BorderRadius.circular(14),child:ListTile(onTap:()=>setState(()=>index=i),leading:Icon(icons[i],color:index==i?const Color(0xff8db8ff):Colors.white54),title:Text(labels[i],style:TextStyle(fontWeight:index==i?FontWeight.w800:FontWeight.w500)),trailing:index==i?Container(width:4,height:22,decoration:BoxDecoration(color:const Color(0xff6ea8ff),borderRadius:BorderRadius.circular(4))):null)))),
+        const Spacer(),
+        Padding(padding:const EdgeInsets.all(16),child:GlassCard(padding:const EdgeInsets.all(12),child:Row(children:[CircleAvatar(radius:19,backgroundImage:widget.user.photoURL==null?null:NetworkImage(widget.user.photoURL!),child:widget.user.photoURL==null?const Icon(CupertinoIcons.person_fill,size:18):null),const SizedBox(width:10),Expanded(child:Column(crossAxisAlignment:CrossAxisAlignment.start,children:[Text(widget.user.displayName??'Google user',maxLines:1,overflow:TextOverflow.ellipsis,style:const TextStyle(fontSize:13,fontWeight:FontWeight.w800)),Text(widget.user.email??'',maxLines:1,overflow:TextOverflow.ellipsis,style:const TextStyle(fontSize:10,color:Colors.white54))]))]))),
+        const Padding(padding:EdgeInsets.only(bottom:14),child:Watermark()),
+      ]))),
+      Expanded(child:Container(color:const Color(0xff070b12),child:Column(children:[
+        Container(height:72,padding:const EdgeInsets.symmetric(horizontal:30),decoration:const BoxDecoration(color:Color(0xff0a0f18),border:Border(bottom:BorderSide(color:Color(0xff202938)))),child:Row(children:[Text(labels[index],style:const TextStyle(fontSize:22,fontWeight:FontWeight.w900)),const Spacer(),Container(padding:const EdgeInsets.symmetric(horizontal:14,vertical:8),decoration:BoxDecoration(color:const Color(0xff111924),borderRadius:BorderRadius.circular(99),border:Border.all(color:Colors.white10)),child:const Row(children:[Icon(CupertinoIcons.cloud_fill,size:15,color:Color(0xff72e7b4)),SizedBox(width:7),Text('Live sync',style:TextStyle(fontSize:12,fontWeight:FontWeight.w700))]))])),
+        Expanded(child:Center(child:ConstrainedBox(constraints:const BoxConstraints(maxWidth:1440),child:current())))
+      ])))
+    ]));
   }
 }
-
-class PageList extends StatelessWidget {
-  const PageList({required this.title, required this.children, this.action, super.key});
-  final String title; final List<Widget> children; final Widget? action;
-  @override Widget build(BuildContext context) => CustomScrollView(slivers:[
-    SliverAppBar.large(pinned:true,title:Text(title),backgroundColor:const Color(0xeb070a10),actions:action == null ? null : [action!]),
-    SliverPadding(padding:const EdgeInsets.fromLTRB(16,8,16,110),sliver:SliverList.list(children:children))
-  ]);
+class Watermark extends StatelessWidget{const Watermark({super.key});@override Widget build(BuildContext context)=>const Text('Designed by Sanjay K',textAlign:TextAlign.center,style:TextStyle(fontSize:10,color:Colors.white30,letterSpacing:.7));}
+class PageList extends StatelessWidget{
+  const PageList({required this.title,required this.children,this.action,super.key});final String title;final List<Widget> children;final Widget? action;
+  @override Widget build(BuildContext context){final wide=MediaQuery.sizeOf(context).width>=900;return CustomScrollView(slivers:[if(!wide)SliverAppBar.large(pinned:true,title:Text(title),backgroundColor:const Color(0xeb070a10),actions:action==null?null:[action!]),SliverPadding(padding:EdgeInsets.fromLTRB(wide?30:16,wide?28:8,wide?30:16,30),sliver:SliverList.list(children:[if(wide)Row(children:[Expanded(child:Column(crossAxisAlignment:CrossAxisAlignment.start,children:[Text(title,style:const TextStyle(fontSize:30,fontWeight:FontWeight.w900)),const SizedBox(height:4),const Text('Manage travel activity, expenses and receipts',style:TextStyle(color:Colors.white54))])),if(action!=null)action!]),if(wide)const SizedBox(height:24),...children,const SizedBox(height:28),const Watermark()])),]);}
 }
 class GlassCard extends StatelessWidget {
   const GlassCard({required this.child, this.padding=const EdgeInsets.all(18), super.key}); final Widget child; final EdgeInsets padding;
@@ -164,27 +164,22 @@ class Bill {
   }
 }
 
-class TripsPage extends StatelessWidget {
+class TripsPage extends StatelessWidget{
   const TripsPage({super.key});
-  @override Widget build(BuildContext context) {
-    final uid=FirebaseAuth.instance.currentUser!.uid;
-    final query=FirebaseFirestore.instance.collection('users').doc(uid).collection('trips').orderBy('createdAt',descending:true);
-    return StreamBuilder<QuerySnapshot<Map<String,dynamic>>>(
-      stream:query.snapshots(),
-      builder:(context,snap){
-        final action=IconButton(onPressed:()=>Navigator.push(context,MaterialPageRoute(builder:(_)=>const NewTripPage())),icon:const Icon(CupertinoIcons.add));
-        if(snap.hasError){return PageList(title:'Trips',action:action,children:[GlassCard(child:Text('Unable to load trips: ${snap.error}',style:const TextStyle(color:Color(0xffff8a8a))))]);}
-        if(!snap.hasData){return PageList(title:'Trips',action:action,children:const [Center(child:Padding(padding:EdgeInsets.all(40),child:CupertinoActivityIndicator()))]);}
-        final items=snap.data!.docs.map(Trip.fromDoc).toList();
-        return PageList(title:'Trips',action:action,children:[
-          GlassCard(child:Row(children:[const Expanded(child:Column(crossAxisAlignment:CrossAxisAlignment.start,children:[Text('Ready for a new journey?',style:TextStyle(fontSize:20,fontWeight:FontWeight.w900)),SizedBox(height:6),Text('Create a trip, then keep every bill together.',style:TextStyle(color:Colors.white60))])),const SizedBox(width:12),FilledButton(onPressed:()=>Navigator.push(context,MaterialPageRoute(builder:(_)=>const NewTripPage())),child:const Text('New trip'))])),
-          const SizedBox(height:24),
-          if(items.isEmpty) const GlassCard(child:Column(children:[Icon(CupertinoIcons.map,size:44,color:Color(0xff90baff)),SizedBox(height:12),Text('No trips yet',style:TextStyle(fontSize:20,fontWeight:FontWeight.w900)),SizedBox(height:6),Text('Create the first trip to begin saving bills.',style:TextStyle(color:Colors.white60))])) else ...items.map((t)=>Padding(padding:const EdgeInsets.only(bottom:12),child:TripCard(trip:t))),
-        ]);
-      },
-    );
-  }
+  @override Widget build(BuildContext context){final uid=FirebaseAuth.instance.currentUser!.uid;final query=FirebaseFirestore.instance.collection('users').doc(uid).collection('trips').orderBy('createdAt',descending:true);return StreamBuilder<QuerySnapshot<Map<String,dynamic>>>(stream:query.snapshots(),builder:(context,snap){
+    final add=FilledButton.icon(onPressed:()=>Navigator.push(context,MaterialPageRoute(builder:(_)=>const NewTripPage())),icon:const Icon(CupertinoIcons.add),label:const Padding(padding:EdgeInsets.symmetric(vertical:12),child:Text('New trip')));
+    if(snap.hasError)return PageList(title:'Dashboard',action:add,children:[GlassCard(child:Text('Unable to load trips: ${snap.error}'))]);
+    if(!snap.hasData)return PageList(title:'Dashboard',action:add,children:const [Center(child:Padding(padding:EdgeInsets.all(50),child:CupertinoActivityIndicator()))]);
+    final items=snap.data!.docs.map(Trip.fromDoc).toList();final totalBills=items.fold<int>(0,(v,t)=>v+t.count);final active=items.where((t)=>t.active).length;
+    return PageList(title:'Dashboard',action:add,children:[
+      LayoutBuilder(builder:(context,c){final cards=[_MetricCard(title:'Total trips',value:'${items.length}',icon:CupertinoIcons.map_fill,color:const Color(0xff6ea8ff)),_MetricCard(title:'Active trips',value:'$active',icon:CupertinoIcons.airplane,color:const Color(0xff72e7b4)),_MetricCard(title:'Bill records',value:'$totalBills',icon:CupertinoIcons.doc_text_fill,color:const Color(0xffffc857))];return c.maxWidth>800?Row(children:[for(var i=0;i<cards.length;i++)Expanded(child:Padding(padding:EdgeInsets.only(right:i==cards.length-1?0:14),child:cards[i]))]):Column(children:cards.map((e)=>Padding(padding:const EdgeInsets.only(bottom:12),child:e)).toList());}),
+      const SizedBox(height:24),
+      Row(children:[const Expanded(child:Text('Recent trips',style:TextStyle(fontSize:21,fontWeight:FontWeight.w900))),Text('${items.length} total',style:const TextStyle(color:Colors.white54))]),const SizedBox(height:12),
+      if(items.isEmpty)GlassCard(child:Column(children:[const Icon(CupertinoIcons.map,size:46,color:Color(0xff90baff)),const SizedBox(height:12),const Text('No trips yet',style:TextStyle(fontSize:20,fontWeight:FontWeight.w900)),const SizedBox(height:6),const Text('Create a trip to begin capturing bills.',style:TextStyle(color:Colors.white60)),const SizedBox(height:16),add]))else LayoutBuilder(builder:(context,c){final cols=c.maxWidth>1050?3:c.maxWidth>680?2:1;final width=(c.maxWidth-(cols-1)*14)/cols;return Wrap(spacing:14,runSpacing:14,children:items.map((t)=>SizedBox(width:width,child:TripCard(trip:t))).toList());})
+    ]);
+  });}
 }
+class _MetricCard extends StatelessWidget{const _MetricCard({required this.title,required this.value,required this.icon,required this.color});final String title,value;final IconData icon;final Color color;@override Widget build(BuildContext context)=>GlassCard(child:Row(children:[Container(width:50,height:50,decoration:BoxDecoration(color:color.withValues(alpha:.14),borderRadius:BorderRadius.circular(15)),child:Icon(icon,color:color)),const SizedBox(width:14),Column(crossAxisAlignment:CrossAxisAlignment.start,children:[Text(value,style:const TextStyle(fontSize:25,fontWeight:FontWeight.w900)),Text(title,style:const TextStyle(color:Colors.white54))])])) ;}
 class TripCard extends StatelessWidget {
   const TripCard({required this.trip,super.key}); final Trip trip;
   @override Widget build(BuildContext context) => InkWell(borderRadius:BorderRadius.circular(22),onTap:()=>Navigator.push(context,MaterialPageRoute(builder:(_)=>TripDetailPage(trip:trip))),child:GlassCard(child:Column(children:[
@@ -192,27 +187,48 @@ class TripCard extends StatelessWidget {
     const SizedBox(height:18),Row(children:[Text(trip.dates,style:const TextStyle(color:Colors.white60)),const Spacer(),Text(trip.total,style:const TextStyle(fontSize:18,fontWeight:FontWeight.w900))]),const SizedBox(height:12),Row(children:[const Icon(CupertinoIcons.doc_text,size:17,color:Color(0xff90baff)),const SizedBox(width:8),Text('${trip.count} bills'),const Spacer(),Text(trip.active?'Active':'Completed',style:TextStyle(color:trip.active?const Color(0xff72e7b4):Colors.white60,fontWeight:FontWeight.w700))])
   ])));
 }
-class TripDetailPage extends StatelessWidget {
+class TripDetailPage extends StatefulWidget {
   const TripDetailPage({required this.trip,super.key}); final Trip trip;
+  @override State<TripDetailPage> createState()=>_TripDetailPageState();
+}
+class _TripDetailPageState extends State<TripDetailPage>{
+  bool exporting=false; int done=0; int total=0;
+  String safe(String value)=>value.replaceAll(RegExp(r'[^A-Za-z0-9_-]+'),'_').replaceAll(RegExp(r'_+'),'_');
+  Future<void> exportPdf(List<Bill> bills)async{
+    if(bills.isEmpty)return;
+    setState((){exporting=true;done=0;total=bills.length;});
+    try{
+      final doc=pw.Document();
+      final currency=bills.first.currency;
+      final grand=bills.fold<int>(0,(s,b)=>s+b.amountMinor);
+      doc.addPage(pw.MultiPage(pageFormat:PdfPageFormat.a4,build:(context)=>[
+        pw.Text(widget.trip.name,style:pw.TextStyle(fontSize:26,fontWeight:pw.FontWeight.bold)),
+        pw.SizedBox(height:6),pw.Text(widget.trip.place.isEmpty?'Travel expense report':widget.trip.place),
+        pw.SizedBox(height:18),pw.Text('Bills: ${bills.length}    Total: $currency ${(grand/100).toStringAsFixed(2)}'),
+        pw.SizedBox(height:18),
+        pw.TableHelper.fromTextArray(headers:['No.','Merchant','Category','Date','Amount'],data:List.generate(bills.length,(i)=>['${i+1}',bills[i].merchant,bills[i].category,bills[i].dateLabel,bills[i].amountLabel])),
+      ]));
+      for(var i=0;i<bills.length;i++){
+        final b=bills[i]; pw.MemoryImage? image;
+        if(b.receiptPath.isNotEmpty){
+          try{final url=await Supabase.instance.client.storage.from('receipts').createSignedUrl(b.receiptPath,600);final response=await http.get(Uri.parse(url));if(response.statusCode==200)image=pw.MemoryImage(response.bodyBytes);}catch(_){ }
+        }
+        doc.addPage(pw.Page(pageFormat:PdfPageFormat.a4,margin:const pw.EdgeInsets.all(32),build:(context)=>pw.Column(crossAxisAlignment:pw.CrossAxisAlignment.start,children:[pw.Text('Bill ${i+1} of ${bills.length}',style:pw.TextStyle(fontSize:18,fontWeight:pw.FontWeight.bold)),pw.SizedBox(height:6),pw.Text('${b.merchant}  |  ${b.category}  |  ${b.dateLabel}  |  ${b.amountLabel}'),pw.SizedBox(height:18),pw.Expanded(child:image==null?pw.Center(child:pw.Text('Receipt image unavailable')):pw.Center(child:pw.Image(image,fit:pw.BoxFit.contain)))])));
+        if(mounted)setState(()=>done=i+1);
+      }
+      final bytes=await doc.save();
+      await Printing.sharePdf(bytes:bytes,filename:'${safe(widget.trip.name)}_Reimbursement.pdf');
+    }catch(e){if(mounted)ScaffoldMessenger.of(context).showSnackBar(SnackBar(content:Text('PDF export failed: $e')));}finally{if(mounted)setState(()=>exporting=false);}
+  }
   @override Widget build(BuildContext context){
     final uid=FirebaseAuth.instance.currentUser!.uid;
-    final stream=FirebaseFirestore.instance.collection('users').doc(uid).collection('trips').doc(trip.id).collection('bills').orderBy('createdAt',descending:true).snapshots();
-    return Scaffold(
-      appBar:AppBar(title:Text(trip.name)),
-      floatingActionButton:FloatingActionButton.extended(onPressed:()=>Navigator.push(context,MaterialPageRoute(builder:(_)=>AddBillPage(trip:trip))),icon:const Icon(CupertinoIcons.add),label:const Text('Add bill')),
-      body:StreamBuilder<QuerySnapshot<Map<String,dynamic>>>(stream:stream,builder:(context,snap){
-        if(snap.hasError){return Center(child:Padding(padding:const EdgeInsets.all(24),child:Text('Unable to load bills: ${snap.error}',style:const TextStyle(color:Color(0xffff8a8a)))));}
-        if(!snap.hasData){return const Center(child:CupertinoActivityIndicator());}
-        final items=snap.data!.docs.map((d)=>Bill.fromDoc(d,trip.id)).toList();
-        final total=items.fold<int>(0,(sum,b)=>sum+b.amountMinor);
-        final currency=items.isEmpty?'':items.first.currency;
-        return ListView(padding:const EdgeInsets.fromLTRB(16,8,16,100),children:[
-          GlassCard(child:Column(crossAxisAlignment:CrossAxisAlignment.start,children:[Text(trip.place.isEmpty?'No destination':trip.place,style:const TextStyle(color:Colors.white60)),const SizedBox(height:6),Text(items.isEmpty?'No expenses':'$currency ${(total/100).toStringAsFixed(2)}',style:const TextStyle(fontSize:32,fontWeight:FontWeight.w900)),Text('${items.length} bills',style:const TextStyle(color:Colors.white60))])),
-          const SizedBox(height:22),const Text('Bills',style:TextStyle(fontSize:21,fontWeight:FontWeight.w900)),const SizedBox(height:12),
-          if(items.isEmpty) const GlassCard(child:Column(children:[Icon(CupertinoIcons.doc_text,size:44,color:Color(0xff90baff)),SizedBox(height:12),Text('No bills yet',style:TextStyle(fontSize:20,fontWeight:FontWeight.w900)),SizedBox(height:6),Text('Tap Add bill to save the first expense.',style:TextStyle(color:Colors.white60))])) else ...items.map((b)=>Padding(padding:const EdgeInsets.only(bottom:10),child:BillTile(bill:b,trip:trip)))
-        ]);
-      })
-    );
+    final stream=FirebaseFirestore.instance.collection('users').doc(uid).collection('trips').doc(widget.trip.id).collection('bills').orderBy('createdAt',descending:true).snapshots();
+    return Scaffold(appBar:AppBar(title:Text(widget.trip.name)),floatingActionButton:FloatingActionButton.extended(onPressed:()=>Navigator.push(context,MaterialPageRoute(builder:(_)=>AddBillPage(trip:widget.trip))),icon:const Icon(CupertinoIcons.add),label:const Text('Add bill')),body:StreamBuilder<QuerySnapshot<Map<String,dynamic>>>(stream:stream,builder:(context,snap){
+      if(snap.hasError)return Center(child:Text('Unable to load bills: ${snap.error}'));
+      if(!snap.hasData)return const Center(child:CupertinoActivityIndicator());
+      final items=snap.data!.docs.map((d)=>Bill.fromDoc(d,widget.trip.id)).toList();final sum=items.fold<int>(0,(s,b)=>s+b.amountMinor);final currency=items.isEmpty?'':items.first.currency;
+      return ListView(padding:const EdgeInsets.fromLTRB(16,8,16,100),children:[GlassCard(child:Column(crossAxisAlignment:CrossAxisAlignment.start,children:[Text(widget.trip.place.isEmpty?'No destination':widget.trip.place,style:const TextStyle(color:Colors.white60)),const SizedBox(height:6),Text(items.isEmpty?'No expenses':'$currency ${(sum/100).toStringAsFixed(2)}',style:const TextStyle(fontSize:32,fontWeight:FontWeight.w900)),Text('${items.length} bills',style:const TextStyle(color:Colors.white60)),if(kIsWeb&&items.isNotEmpty)...[const SizedBox(height:16),FilledButton.icon(onPressed:exporting?null:()=>exportPdf(items),icon:const Icon(CupertinoIcons.doc_fill),label:Padding(padding:const EdgeInsets.symmetric(vertical:12),child:Text(exporting?'Preparing PDF $done/$total':'Save all bills as PDF')))] ])),const SizedBox(height:22),const Text('Bills',style:TextStyle(fontSize:21,fontWeight:FontWeight.w900)),const SizedBox(height:12),if(items.isEmpty)const GlassCard(child:Text('No bills yet'))else...items.map((b)=>Padding(padding:const EdgeInsets.only(bottom:10),child:BillTile(bill:b,trip:widget.trip))),const SizedBox(height:28),const Watermark()]);
+    }));
   }
 }
 class ReceiptImage extends StatefulWidget {
@@ -234,12 +250,13 @@ class _BillDetailPageState extends State<BillDetailPage>{
   bool deleting=false;
   Future<void> openReceipt() async {
     if(widget.bill.receiptPath.isEmpty)return;
-    final url=await Supabase.instance.client.storage.from('receipts').createSignedUrl(widget.bill.receiptPath,600);
+    var url=await Supabase.instance.client.storage.from('receipts').createSignedUrl(widget.bill.receiptPath,600);
+    if(kIsWeb)url='$url&download=${Uri.encodeComponent(widget.bill.merchant)}_receipt.jpg';
     final ok=await launchUrl(Uri.parse(url),mode:kIsWeb?LaunchMode.platformDefault:LaunchMode.externalApplication);
     if(!ok&&mounted)ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content:Text('Could not open receipt.')));
   }
   Future<void> deleteBill() async {setState(()=>deleting=true);try{final uid=FirebaseAuth.instance.currentUser!.uid;if(widget.bill.receiptPath.isNotEmpty)await Supabase.instance.client.storage.from('receipts').remove([widget.bill.receiptPath]);final db=FirebaseFirestore.instance;final tripRef=db.collection('users').doc(uid).collection('trips').doc(widget.trip.id);final billRef=tripRef.collection('bills').doc(widget.bill.id);await db.runTransaction((tx)async{final snap=await tx.get(tripRef);final d=snap.data()??{};final count=((d['billCount']as num?)?.toInt()??1)-1;final total=((d['totalMinor']as num?)?.toInt()??widget.bill.amountMinor)-widget.bill.amountMinor;tx.delete(billRef);tx.update(tripRef,{'billCount':count<0?0:count,'totalMinor':total<0?0:total,'totalLabel':total<=0?'No expenses':'${widget.bill.currency} ${(total/100).toStringAsFixed(2)}','updatedAt':FieldValue.serverTimestamp()});});if(mounted)Navigator.pop(context);}catch(e){if(mounted)ScaffoldMessenger.of(context).showSnackBar(SnackBar(content:Text('$e')));}finally{if(mounted)setState(()=>deleting=false);}}
-  @override Widget build(BuildContext context)=>Scaffold(appBar:AppBar(title:const Text('Bill details'),actions:[IconButton(onPressed:deleting?null:deleteBill,icon:const Icon(CupertinoIcons.delete,color:Color(0xffff8a8a)))]),body:ListView(padding:const EdgeInsets.all(16),children:[ClipRRect(borderRadius:BorderRadius.circular(24),child:Container(height:360,color:const Color(0xff172238),child:ReceiptImage(path:widget.bill.receiptPath,fit:BoxFit.contain,iconSize:58))),const SizedBox(height:12),if(widget.bill.receiptPath.isNotEmpty)FilledButton.icon(onPressed:openReceipt,icon:const Icon(CupertinoIcons.arrow_down_to_line),label:const Padding(padding:EdgeInsets.symmetric(vertical:13),child:Text('Open or download receipt'))),const SizedBox(height:18),GlassCard(child:Column(crossAxisAlignment:CrossAxisAlignment.start,children:[Text(widget.bill.merchant,style:const TextStyle(fontSize:22,fontWeight:FontWeight.w900)),const SizedBox(height:5),Text('${widget.bill.category} - ${widget.bill.dateLabel}',style:const TextStyle(color:Colors.white60)),const SizedBox(height:16),Text(widget.bill.amountLabel,style:const TextStyle(fontSize:32,fontWeight:FontWeight.w900)),if(widget.bill.notes.isNotEmpty)...[const SizedBox(height:16),Text(widget.bill.notes)]]))]));
+  @override Widget build(BuildContext context)=>Scaffold(appBar:AppBar(title:const Text('Bill details'),actions:[IconButton(onPressed:deleting?null:deleteBill,icon:const Icon(CupertinoIcons.delete,color:Color(0xffff8a8a)))]),body:ListView(padding:const EdgeInsets.all(16),children:[ClipRRect(borderRadius:BorderRadius.circular(24),child:Container(height:360,color:const Color(0xff172238),child:ReceiptImage(path:widget.bill.receiptPath,fit:BoxFit.contain,iconSize:58))),const SizedBox(height:12),if(widget.bill.receiptPath.isNotEmpty)FilledButton.icon(onPressed:openReceipt,icon:const Icon(CupertinoIcons.arrow_down_to_line),label:const Padding(padding:EdgeInsets.symmetric(vertical:13),child:Text(kIsWeb?'Download receipt':'Open receipt'))),const SizedBox(height:18),GlassCard(child:Column(crossAxisAlignment:CrossAxisAlignment.start,children:[Text(widget.bill.merchant,style:const TextStyle(fontSize:22,fontWeight:FontWeight.w900)),const SizedBox(height:5),Text('${widget.bill.category} - ${widget.bill.dateLabel}',style:const TextStyle(color:Colors.white60)),const SizedBox(height:16),Text(widget.bill.amountLabel,style:const TextStyle(fontSize:32,fontWeight:FontWeight.w900)),if(widget.bill.notes.isNotEmpty)...[const SizedBox(height:16),Text(widget.bill.notes)]])),const SizedBox(height:28),const Watermark()]));
 }
 class BillsPage extends StatelessWidget {const BillsPage({super.key});@override Widget build(BuildContext context)=>PageList(title:'Recent bills',children:const [GlassCard(child:Column(children:[Icon(CupertinoIcons.map_fill,size:42,color:Color(0xff90baff)),SizedBox(height:12),Text('Bills are grouped by trip',style:TextStyle(fontSize:20,fontWeight:FontWeight.w900)),SizedBox(height:6),Text('Open a trip to view, add, or delete its bills.',textAlign:TextAlign.center,style:TextStyle(color:Colors.white60))]))]);}
 class NewTripPage extends StatefulWidget { const NewTripPage({super.key}); @override State<NewTripPage> createState()=>_NewTripPageState(); }
@@ -259,3 +276,18 @@ class _AddBillPageState extends State<AddBillPage>{
   @override Widget build(BuildContext context){if(widget.trip==null)return PageList(title:'Add bill',children:const [GlassCard(child:Column(children:[Icon(CupertinoIcons.map,size:44,color:Color(0xff90baff)),SizedBox(height:12),Text('Choose a trip first',style:TextStyle(fontSize:20,fontWeight:FontWeight.w900)),SizedBox(height:6),Text('Open a trip and tap Add bill.',style:TextStyle(color:Colors.white60))]))]);return Scaffold(appBar:AppBar(title:const Text('Add bill')),body:ListView(padding:const EdgeInsets.all(16),children:[Text(widget.trip!.name,style:const TextStyle(color:Color(0xff90baff),fontWeight:FontWeight.w900)),const SizedBox(height:14),InkWell(onTap:saving?null:choosePhoto,borderRadius:BorderRadius.circular(22),child:ClipRRect(borderRadius:BorderRadius.circular(22),child:Container(height:190,width:double.infinity,color:Colors.white.withValues(alpha:.06),child:receipt==null?const Column(mainAxisAlignment:MainAxisAlignment.center,children:[Icon(CupertinoIcons.camera_fill,size:42),SizedBox(height:8),Text('Take or choose receipt',style:TextStyle(fontWeight:FontWeight.w900)),SizedBox(height:4),Text('Required - compressed below 5 MB',style:TextStyle(color:Colors.white60))]):Image.network(receipt!.path,fit:BoxFit.cover,errorBuilder:(_,__,___)=>const Center(child:Text('Receipt selected')))))),const SizedBox(height:16),TextField(controller:merchant,decoration:const InputDecoration(labelText:'Merchant *')),const SizedBox(height:14),Row(children:[Expanded(flex:2,child:TextField(controller:amount,keyboardType:const TextInputType.numberWithOptions(decimal:true),decoration:const InputDecoration(labelText:'Amount *'))),const SizedBox(width:10),Expanded(child:TextField(controller:currency,decoration:const InputDecoration(labelText:'Currency')))]),const SizedBox(height:14),TextField(controller:category,decoration:const InputDecoration(labelText:'Category')),const SizedBox(height:14),TextField(controller:notes,maxLines:3,decoration:const InputDecoration(labelText:'Notes')),const SizedBox(height:20),FilledButton(onPressed:saving?null:save,child:Padding(padding:const EdgeInsets.symmetric(vertical:16),child:Text(saving?'Uploading receipt...':'Save bill and receipt')))]));}
 }
 class ProfilePage extends StatelessWidget {const ProfilePage({required this.user,super.key});final User user;Future<void> logout()async{if(!kIsWeb)await GoogleSignIn.instance.signOut();await FirebaseAuth.instance.signOut();}@override Widget build(BuildContext context)=>PageList(title:'Profile',children:[GlassCard(child:Row(children:[CircleAvatar(radius:32,backgroundImage:user.photoURL==null?null:NetworkImage(user.photoURL!),child:user.photoURL==null?const Icon(CupertinoIcons.person_fill):null),const SizedBox(width:14),Expanded(child:Column(crossAxisAlignment:CrossAxisAlignment.start,children:[Text(user.displayName??'Google user',style:const TextStyle(fontSize:18,fontWeight:FontWeight.w900)),Text(user.email??'',style:const TextStyle(color:Colors.white60))]))])),const SizedBox(height:18),GlassCard(child:ListTile(onTap:logout,leading:const Icon(CupertinoIcons.square_arrow_right,color:Color(0xffff8a8a)),title:const Text('Sign out',style:TextStyle(color:Color(0xffff8a8a)))))]);}
+
+
+class DeveloperAnnouncement{
+  const DeveloperAnnouncement({required this.enabled,required this.title,required this.message,required this.publishedAt,required this.severity});
+  final bool enabled;final String title,message,publishedAt,severity;
+  factory DeveloperAnnouncement.fromJson(Map<String,dynamic> j)=>DeveloperAnnouncement(enabled:j['enabled']!=false,title:(j['title']??'Developer announcement').toString(),message:(j['message']??'').toString(),publishedAt:(j['publishedAt']??'').toString(),severity:(j['severity']??'info').toString());
+}
+class AboutPage extends StatefulWidget{const AboutPage({super.key});@override State<AboutPage> createState()=>_AboutPageState();}
+class _AboutPageState extends State<AboutPage>{
+  DeveloperAnnouncement? announcement;bool loading=true;String? error;
+  @override void initState(){super.initState();load();}
+  Future<void> load()async{setState((){loading=true;error=null;});final prefs=await SharedPreferences.getInstance();try{final uri=Uri.parse('https://travel-expense-8eb83.web.app/config/announcement.json?t=${DateTime.now().millisecondsSinceEpoch}');final r=await http.get(uri).timeout(const Duration(seconds:5));if(r.statusCode!=200)throw Exception('HTTP ${r.statusCode}');await prefs.setString('developer_announcement',r.body);announcement=DeveloperAnnouncement.fromJson(jsonDecode(r.body));}catch(e){final cached=prefs.getString('developer_announcement');if(cached!=null){announcement=DeveloperAnnouncement.fromJson(jsonDecode(cached));}else{error='Announcement is temporarily unavailable.';}}if(mounted)setState(()=>loading=false);}
+  Color tone(String severity)=>switch(severity){'success'=>const Color(0xff72e7b4),'warning'=>const Color(0xffffc857),'critical'=>const Color(0xffff8a8a),_=>const Color(0xff78afff)};
+  @override Widget build(BuildContext context)=>PageList(title:'About',children:[GlassCard(child:Column(crossAxisAlignment:CrossAxisAlignment.start,children:const [Icon(CupertinoIcons.doc_text_viewfinder,size:44,color:Color(0xff78afff)),SizedBox(height:14),Text('Travel Expense',style:TextStyle(fontSize:24,fontWeight:FontWeight.w900)),SizedBox(height:4),Text('Version 0.7.0 • Capture • Organize • Retrieve',style:TextStyle(color:Colors.white60))])),const SizedBox(height:16),GlassCard(child:Column(crossAxisAlignment:CrossAxisAlignment.start,children:const [Text('Developer',style:TextStyle(fontSize:18,fontWeight:FontWeight.w900)),SizedBox(height:8),Text('Developed by Sanjay Kariyanna'),Text('Engineer General Studies',style:TextStyle(color:Colors.white60))])),const SizedBox(height:16),if(loading)const GlassCard(child:Center(child:CupertinoActivityIndicator()))else if(announcement!=null&&announcement!.enabled)GlassCard(child:Column(crossAxisAlignment:CrossAxisAlignment.start,children:[Row(children:[Icon(CupertinoIcons.bell_fill,color:tone(announcement!.severity)),const SizedBox(width:10),Expanded(child:Text(announcement!.title,style:const TextStyle(fontSize:18,fontWeight:FontWeight.w900))),IconButton(onPressed:load,icon:const Icon(CupertinoIcons.refresh))]),const SizedBox(height:8),Text(announcement!.message),if(announcement!.publishedAt.isNotEmpty)...[const SizedBox(height:10),Text(announcement!.publishedAt,style:const TextStyle(color:Colors.white54,fontSize:12))]]))else GlassCard(child:ListTile(leading:const Icon(CupertinoIcons.info),title:Text(error??'No announcement'),trailing:IconButton(onPressed:load,icon:const Icon(CupertinoIcons.refresh))))]);
+}
