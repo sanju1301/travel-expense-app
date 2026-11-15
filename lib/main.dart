@@ -3,18 +3,29 @@ import 'dart:typed_data';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_core/firebase_core.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import 'package:google_sign_in/google_sign_in.dart';
 import 'package:image_picker/image_picker.dart';
+import 'package:url_launcher/url_launcher.dart';
 import 'package:supabase_flutter/supabase_flutter.dart' hide User;
 import 'supabase_config.dart';
+import 'firebase_web_config.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  await Firebase.initializeApp();
-  await GoogleSignIn.instance.initialize();
-  await Supabase.initialize(url: supabaseUrl, publishableKey: supabasePublishableKey, accessToken: () async => FirebaseAuth.instance.currentUser?.getIdToken());
+  if (kIsWeb) {
+    await Firebase.initializeApp(options: firebaseWebOptions);
+  } else {
+    await Firebase.initializeApp();
+    await GoogleSignIn.instance.initialize();
+  }
+  await Supabase.initialize(
+    url: supabaseUrl,
+    publishableKey: supabasePublishableKey,
+    accessToken: () async => FirebaseAuth.instance.currentUser?.getIdToken(),
+  );
   runApp(const ExpenseApp());
 }
 
@@ -62,9 +73,15 @@ class _LoginPageState extends State<LoginPage> {
   Future<void> login() async {
     setState(() { busy = true; error = null; });
     try {
-      final account = await GoogleSignIn.instance.authenticate();
-      final auth = account.authentication;
-      await FirebaseAuth.instance.signInWithCredential(GoogleAuthProvider.credential(idToken: auth.idToken));
+      if (kIsWeb) {
+        await FirebaseAuth.instance.signInWithPopup(GoogleAuthProvider());
+      } else {
+        final account = await GoogleSignIn.instance.authenticate();
+        final auth = account.authentication;
+        await FirebaseAuth.instance.signInWithCredential(
+          GoogleAuthProvider.credential(idToken: auth.idToken),
+        );
+      }
     } on GoogleSignInException catch (e) {
       if (e.code != GoogleSignInExceptionCode.canceled && mounted) setState(() => error = e.description ?? 'Google sign-in failed');
     } on FirebaseAuthException catch (e) {
@@ -95,9 +112,23 @@ class HomeShell extends StatefulWidget {
 }
 class _HomeShellState extends State<HomeShell> {
   int index = 0;
+  static const destinations = [
+    NavigationRailDestination(icon:Icon(CupertinoIcons.map),selectedIcon:Icon(CupertinoIcons.map_fill),label:Text('Trips')),
+    NavigationRailDestination(icon:Icon(CupertinoIcons.doc_text),selectedIcon:Icon(CupertinoIcons.doc_text_fill),label:Text('Bills')),
+    NavigationRailDestination(icon:Icon(CupertinoIcons.camera),selectedIcon:Icon(CupertinoIcons.camera_fill),label:Text('Add')),
+    NavigationRailDestination(icon:Icon(CupertinoIcons.person),selectedIcon:Icon(CupertinoIcons.person_fill),label:Text('Profile')),
+  ];
   @override Widget build(BuildContext context) {
-    Widget page = switch(index) { 0 => const TripsPage(), 1 => const BillsPage(), 2 => const AddBillPage(), _ => ProfilePage(user: widget.user) };
-    return Scaffold(extendBody:true, body: KeyedSubtree(key: ValueKey(index), child: page), bottomNavigationBar: SafeArea(top:false, child: Padding(padding: const EdgeInsets.fromLTRB(14,0,14,10), child: ClipRRect(borderRadius: BorderRadius.circular(24), child: BackdropFilter(filter: ImageFilter.blur(sigmaX:16,sigmaY:16), child: NavigationBar(backgroundColor: const Color(0xcc121722), selectedIndex:index, onDestinationSelected:(v)=>setState(()=>index=v), destinations: const [
+    final page = switch(index) {0=>const TripsPage(),1=>const BillsPage(),2=>const AddBillPage(),_=>ProfilePage(user:widget.user)};
+    final wide=MediaQuery.sizeOf(context).width>=900;
+    if(wide){
+      return Scaffold(body:Row(children:[
+        SafeArea(child:NavigationRail(extended:MediaQuery.sizeOf(context).width>=1200,backgroundColor:const Color(0xff0d121c),selectedIndex:index,onDestinationSelected:(v)=>setState(()=>index=v),leading:const Padding(padding:EdgeInsets.symmetric(vertical:22),child:Icon(CupertinoIcons.doc_text_viewfinder,size:34,color:Color(0xff78afff))),destinations:destinations)),
+        const VerticalDivider(width:1),
+        Expanded(child:Center(child:ConstrainedBox(constraints:const BoxConstraints(maxWidth:1250),child:KeyedSubtree(key:ValueKey(index),child:page))))
+      ]));
+    }
+    return Scaffold(extendBody:true,body:KeyedSubtree(key:ValueKey(index),child:page),bottomNavigationBar:SafeArea(top:false,child:Padding(padding:const EdgeInsets.fromLTRB(14,0,14,10),child:ClipRRect(borderRadius:BorderRadius.circular(24),child:BackdropFilter(filter:ImageFilter.blur(sigmaX:16,sigmaY:16),child:NavigationBar(backgroundColor:const Color(0xcc121722),selectedIndex:index,onDestinationSelected:(v)=>setState(()=>index=v),destinations:const[
       NavigationDestination(icon:Icon(CupertinoIcons.map),selectedIcon:Icon(CupertinoIcons.map_fill),label:'Trips'),
       NavigationDestination(icon:Icon(CupertinoIcons.doc_text),selectedIcon:Icon(CupertinoIcons.doc_text_fill),label:'Bills'),
       NavigationDestination(icon:Icon(CupertinoIcons.camera),selectedIcon:Icon(CupertinoIcons.camera_fill),label:'Add'),
@@ -201,8 +232,14 @@ class BillTile extends StatelessWidget {
 class BillDetailPage extends StatefulWidget {const BillDetailPage({required this.bill,required this.trip,super.key});final Bill bill;final Trip trip;@override State<BillDetailPage> createState()=>_BillDetailPageState();}
 class _BillDetailPageState extends State<BillDetailPage>{
   bool deleting=false;
+  Future<void> openReceipt() async {
+    if(widget.bill.receiptPath.isEmpty)return;
+    final url=await Supabase.instance.client.storage.from('receipts').createSignedUrl(widget.bill.receiptPath,600);
+    final ok=await launchUrl(Uri.parse(url),mode:kIsWeb?LaunchMode.platformDefault:LaunchMode.externalApplication);
+    if(!ok&&mounted)ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content:Text('Could not open receipt.')));
+  }
   Future<void> deleteBill() async {setState(()=>deleting=true);try{final uid=FirebaseAuth.instance.currentUser!.uid;if(widget.bill.receiptPath.isNotEmpty)await Supabase.instance.client.storage.from('receipts').remove([widget.bill.receiptPath]);final db=FirebaseFirestore.instance;final tripRef=db.collection('users').doc(uid).collection('trips').doc(widget.trip.id);final billRef=tripRef.collection('bills').doc(widget.bill.id);await db.runTransaction((tx)async{final snap=await tx.get(tripRef);final d=snap.data()??{};final count=((d['billCount']as num?)?.toInt()??1)-1;final total=((d['totalMinor']as num?)?.toInt()??widget.bill.amountMinor)-widget.bill.amountMinor;tx.delete(billRef);tx.update(tripRef,{'billCount':count<0?0:count,'totalMinor':total<0?0:total,'totalLabel':total<=0?'No expenses':'${widget.bill.currency} ${(total/100).toStringAsFixed(2)}','updatedAt':FieldValue.serverTimestamp()});});if(mounted)Navigator.pop(context);}catch(e){if(mounted)ScaffoldMessenger.of(context).showSnackBar(SnackBar(content:Text('$e')));}finally{if(mounted)setState(()=>deleting=false);}}
-  @override Widget build(BuildContext context)=>Scaffold(appBar:AppBar(title:const Text('Bill details'),actions:[IconButton(onPressed:deleting?null:deleteBill,icon:const Icon(CupertinoIcons.delete,color:Color(0xffff8a8a)))]),body:ListView(padding:const EdgeInsets.all(16),children:[ClipRRect(borderRadius:BorderRadius.circular(24),child:Container(height:360,color:const Color(0xff172238),child:ReceiptImage(path:widget.bill.receiptPath,fit:BoxFit.contain,iconSize:58))),const SizedBox(height:18),GlassCard(child:Column(crossAxisAlignment:CrossAxisAlignment.start,children:[Text(widget.bill.merchant,style:const TextStyle(fontSize:22,fontWeight:FontWeight.w900)),const SizedBox(height:5),Text('${widget.bill.category} - ${widget.bill.dateLabel}',style:const TextStyle(color:Colors.white60)),const SizedBox(height:16),Text(widget.bill.amountLabel,style:const TextStyle(fontSize:32,fontWeight:FontWeight.w900)),if(widget.bill.notes.isNotEmpty)...[const SizedBox(height:16),Text(widget.bill.notes)]]))]));
+  @override Widget build(BuildContext context)=>Scaffold(appBar:AppBar(title:const Text('Bill details'),actions:[IconButton(onPressed:deleting?null:deleteBill,icon:const Icon(CupertinoIcons.delete,color:Color(0xffff8a8a)))]),body:ListView(padding:const EdgeInsets.all(16),children:[ClipRRect(borderRadius:BorderRadius.circular(24),child:Container(height:360,color:const Color(0xff172238),child:ReceiptImage(path:widget.bill.receiptPath,fit:BoxFit.contain,iconSize:58))),const SizedBox(height:12),if(widget.bill.receiptPath.isNotEmpty)FilledButton.icon(onPressed:openReceipt,icon:const Icon(CupertinoIcons.arrow_down_to_line),label:const Padding(padding:EdgeInsets.symmetric(vertical:13),child:Text('Open or download receipt'))),const SizedBox(height:18),GlassCard(child:Column(crossAxisAlignment:CrossAxisAlignment.start,children:[Text(widget.bill.merchant,style:const TextStyle(fontSize:22,fontWeight:FontWeight.w900)),const SizedBox(height:5),Text('${widget.bill.category} - ${widget.bill.dateLabel}',style:const TextStyle(color:Colors.white60)),const SizedBox(height:16),Text(widget.bill.amountLabel,style:const TextStyle(fontSize:32,fontWeight:FontWeight.w900)),if(widget.bill.notes.isNotEmpty)...[const SizedBox(height:16),Text(widget.bill.notes)]]))]));
 }
 class BillsPage extends StatelessWidget {const BillsPage({super.key});@override Widget build(BuildContext context)=>PageList(title:'Recent bills',children:const [GlassCard(child:Column(children:[Icon(CupertinoIcons.map_fill,size:42,color:Color(0xff90baff)),SizedBox(height:12),Text('Bills are grouped by trip',style:TextStyle(fontSize:20,fontWeight:FontWeight.w900)),SizedBox(height:6),Text('Open a trip to view, add, or delete its bills.',textAlign:TextAlign.center,style:TextStyle(color:Colors.white60))]))]);}
 class NewTripPage extends StatefulWidget { const NewTripPage({super.key}); @override State<NewTripPage> createState()=>_NewTripPageState(); }
@@ -221,4 +258,4 @@ class _AddBillPageState extends State<AddBillPage>{
   Future<void> save()async{if(widget.trip==null)return;final value=double.tryParse(amount.text.trim().replaceAll(',',''));if(merchant.text.trim().isEmpty||value==null||value<=0){ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content:Text('Enter a merchant and valid amount.')));return;}if(receipt==null){ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content:Text('Take or choose a receipt photograph.')));return;}setState(()=>saving=true);String? uploaded;try{final uid=FirebaseAuth.instance.currentUser!.uid;final db=FirebaseFirestore.instance;final tripRef=db.collection('users').doc(uid).collection('trips').doc(widget.trip!.id);final billRef=tripRef.collection('bills').doc();final minor=(value*100).round();final code=currency.text.trim().toUpperCase().isEmpty?'INR':currency.text.trim().toUpperCase();final Uint8List bytes=await receipt!.readAsBytes();if(bytes.lengthInBytes>5*1024*1024)throw Exception('Receipt remains larger than 5 MB. Choose a smaller image.');uploaded='$uid/${widget.trip!.id}/${billRef.id}/receipt.jpg';await Supabase.instance.client.storage.from('receipts').uploadBinary(uploaded,bytes,fileOptions:const FileOptions(contentType:'image/jpeg',upsert:false));await db.runTransaction((tx)async{final snap=await tx.get(tripRef);final d=snap.data()??{};final count=(d['billCount']as num?)?.toInt()??0;final total=(d['totalMinor']as num?)?.toInt()??0;tx.set(billRef,{'merchant':merchant.text.trim(),'amountMinor':minor,'currency':code,'category':category.text.trim().isEmpty?'Other':category.text.trim(),'notes':notes.text.trim(),'dateLabel':'Today','status':'synced','receiptPath':uploaded,'imageProvider':'supabase','createdAt':FieldValue.serverTimestamp(),'updatedAt':FieldValue.serverTimestamp()});final next=total+minor;tx.update(tripRef,{'billCount':count+1,'totalMinor':next,'totalLabel':'$code ${(next/100).toStringAsFixed(2)}','updatedAt':FieldValue.serverTimestamp()});});if(mounted)Navigator.pop(context);}catch(e){if(uploaded!=null){try{await Supabase.instance.client.storage.from('receipts').remove([uploaded]);}catch(_){}}if(mounted)ScaffoldMessenger.of(context).showSnackBar(SnackBar(content:Text('Could not save receipt: $e')));}finally{if(mounted)setState(()=>saving=false);}}
   @override Widget build(BuildContext context){if(widget.trip==null)return PageList(title:'Add bill',children:const [GlassCard(child:Column(children:[Icon(CupertinoIcons.map,size:44,color:Color(0xff90baff)),SizedBox(height:12),Text('Choose a trip first',style:TextStyle(fontSize:20,fontWeight:FontWeight.w900)),SizedBox(height:6),Text('Open a trip and tap Add bill.',style:TextStyle(color:Colors.white60))]))]);return Scaffold(appBar:AppBar(title:const Text('Add bill')),body:ListView(padding:const EdgeInsets.all(16),children:[Text(widget.trip!.name,style:const TextStyle(color:Color(0xff90baff),fontWeight:FontWeight.w900)),const SizedBox(height:14),InkWell(onTap:saving?null:choosePhoto,borderRadius:BorderRadius.circular(22),child:ClipRRect(borderRadius:BorderRadius.circular(22),child:Container(height:190,width:double.infinity,color:Colors.white.withValues(alpha:.06),child:receipt==null?const Column(mainAxisAlignment:MainAxisAlignment.center,children:[Icon(CupertinoIcons.camera_fill,size:42),SizedBox(height:8),Text('Take or choose receipt',style:TextStyle(fontWeight:FontWeight.w900)),SizedBox(height:4),Text('Required - compressed below 5 MB',style:TextStyle(color:Colors.white60))]):Image.network(receipt!.path,fit:BoxFit.cover,errorBuilder:(_,__,___)=>const Center(child:Text('Receipt selected')))))),const SizedBox(height:16),TextField(controller:merchant,decoration:const InputDecoration(labelText:'Merchant *')),const SizedBox(height:14),Row(children:[Expanded(flex:2,child:TextField(controller:amount,keyboardType:const TextInputType.numberWithOptions(decimal:true),decoration:const InputDecoration(labelText:'Amount *'))),const SizedBox(width:10),Expanded(child:TextField(controller:currency,decoration:const InputDecoration(labelText:'Currency')))]),const SizedBox(height:14),TextField(controller:category,decoration:const InputDecoration(labelText:'Category')),const SizedBox(height:14),TextField(controller:notes,maxLines:3,decoration:const InputDecoration(labelText:'Notes')),const SizedBox(height:20),FilledButton(onPressed:saving?null:save,child:Padding(padding:const EdgeInsets.symmetric(vertical:16),child:Text(saving?'Uploading receipt...':'Save bill and receipt')))]));}
 }
-class ProfilePage extends StatelessWidget {const ProfilePage({required this.user,super.key});final User user;Future<void> logout()async{await GoogleSignIn.instance.signOut();await FirebaseAuth.instance.signOut();}@override Widget build(BuildContext context)=>PageList(title:'Profile',children:[GlassCard(child:Row(children:[CircleAvatar(radius:32,backgroundImage:user.photoURL==null?null:NetworkImage(user.photoURL!),child:user.photoURL==null?const Icon(CupertinoIcons.person_fill):null),const SizedBox(width:14),Expanded(child:Column(crossAxisAlignment:CrossAxisAlignment.start,children:[Text(user.displayName??'Google user',style:const TextStyle(fontSize:18,fontWeight:FontWeight.w900)),Text(user.email??'',style:const TextStyle(color:Colors.white60))]))])),const SizedBox(height:18),GlassCard(child:ListTile(onTap:logout,leading:const Icon(CupertinoIcons.square_arrow_right,color:Color(0xffff8a8a)),title:const Text('Sign out',style:TextStyle(color:Color(0xffff8a8a)))))]);}
+class ProfilePage extends StatelessWidget {const ProfilePage({required this.user,super.key});final User user;Future<void> logout()async{if(!kIsWeb)await GoogleSignIn.instance.signOut();await FirebaseAuth.instance.signOut();}@override Widget build(BuildContext context)=>PageList(title:'Profile',children:[GlassCard(child:Row(children:[CircleAvatar(radius:32,backgroundImage:user.photoURL==null?null:NetworkImage(user.photoURL!),child:user.photoURL==null?const Icon(CupertinoIcons.person_fill):null),const SizedBox(width:14),Expanded(child:Column(crossAxisAlignment:CrossAxisAlignment.start,children:[Text(user.displayName??'Google user',style:const TextStyle(fontSize:18,fontWeight:FontWeight.w900)),Text(user.email??'',style:const TextStyle(color:Colors.white60))]))])),const SizedBox(height:18),GlassCard(child:ListTile(onTap:logout,leading:const Icon(CupertinoIcons.square_arrow_right,color:Color(0xffff8a8a)),title:const Text('Sign out',style:TextStyle(color:Color(0xffff8a8a)))))]);}
