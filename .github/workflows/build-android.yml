@@ -12,7 +12,7 @@ permissions:
 jobs:
   build:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 35
 
     steps:
       - name: Checkout repository
@@ -31,7 +31,132 @@ jobs:
           cache: true
 
       - name: Generate Android and Web files
-        run: flutter create --platforms=android,web --org com.sanjay --project-name travel_expense .
+        run: >
+          flutter create
+          --platforms=android,web
+          --org com.sanjay
+          --project-name travel_expense
+          .
+
+      - name: Restore Firebase configuration
+        env:
+          GOOGLE_SERVICES_JSON_BASE64: ${{ secrets.GOOGLE_SERVICES_JSON_BASE64 }}
+        run: |
+          echo "$GOOGLE_SERVICES_JSON_BASE64" | base64 --decode > android/app/google-services.json
+          test -s android/app/google-services.json
+
+      - name: Restore Android signing key
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+        run: |
+          echo "$ANDROID_KEYSTORE_BASE64" | base64 --decode > android/app/travel-expense-dev.jks
+          test -s android/app/travel-expense-dev.jks
+
+      - name: Create signing properties
+        env:
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          {
+            echo "storePassword=$ANDROID_KEYSTORE_PASSWORD"
+            echo "keyPassword=$ANDROID_KEY_PASSWORD"
+            echo "keyAlias=$ANDROID_KEY_ALIAS"
+            echo "storeFile=travel-expense-dev.jks"
+          } > android/key.properties
+
+      - name: Configure Google Services and Android signing
+        run: |
+          python3 <<'PY'
+          from pathlib import Path
+
+          settings = Path("android/settings.gradle.kts")
+          settings_text = settings.read_text()
+
+          google_plugin = (
+              '    id("com.google.gms.google-services") '
+              'version "4.4.4" apply false\n'
+          )
+
+          if 'id("com.google.gms.google-services")' not in settings_text:
+              marker = 'plugins {\n'
+              if marker not in settings_text:
+                  raise SystemExit(
+                      "Could not locate plugins block in settings.gradle.kts"
+                  )
+              settings_text = settings_text.replace(
+                  marker,
+                  marker + google_plugin,
+                  1,
+              )
+              settings.write_text(settings_text)
+
+          app = Path("android/app/build.gradle.kts")
+          app_text = app.read_text()
+
+          if 'import java.util.Properties' not in app_text:
+              imports = (
+                  'import java.util.Properties\n'
+                  'import java.io.FileInputStream\n\n'
+              )
+              app_text = imports + app_text
+
+          if 'id("com.google.gms.google-services")' not in app_text:
+              marker = 'plugins {\n'
+              app_text = app_text.replace(
+                  marker,
+                  marker + '    id("com.google.gms.google-services")\n',
+                  1,
+              )
+
+          signing_setup = '''
+          val keystoreProperties = Properties()
+          val keystorePropertiesFile = rootProject.file("key.properties")
+          if (keystorePropertiesFile.exists()) {
+              keystoreProperties.load(FileInputStream(keystorePropertiesFile))
+          }
+
+          '''
+
+          if 'val keystoreProperties = Properties()' not in app_text:
+              marker = 'android {\n'
+              app_text = app_text.replace(
+                  marker,
+                  signing_setup + marker,
+                  1,
+              )
+
+          signing_config = '''
+              signingConfigs {
+                  create("release") {
+                      keyAlias = keystoreProperties["keyAlias"] as String
+                      keyPassword = keystoreProperties["keyPassword"] as String
+                      storeFile = file(
+                          keystoreProperties["storeFile"] as String
+                      )
+                      storePassword =
+                          keystoreProperties["storePassword"] as String
+                  }
+              }
+
+          '''
+
+          if 'signingConfigs {' not in app_text:
+              marker = '    buildTypes {\n'
+              app_text = app_text.replace(
+                  marker,
+                  signing_config + marker,
+                  1,
+              )
+
+          old_debug = 'signingConfig = signingConfigs.getByName("debug")'
+          release_signing = (
+              'signingConfig = signingConfigs.getByName("release")'
+          )
+          app_text = app_text.replace(old_debug, release_signing)
+
+          app.write_text(app_text)
+          PY
 
       - name: Install dependencies
         run: flutter pub get
@@ -42,13 +167,24 @@ jobs:
       - name: Run tests
         run: flutter test
 
-      - name: Build debug APK
+      - name: Verify signing certificate
+        env:
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+        run: |
+          keytool -list -v \
+            -keystore android/app/travel-expense-dev.jks \
+            -alias "$ANDROID_KEY_ALIAS" \
+            -storepass "$ANDROID_KEYSTORE_PASSWORD" \
+            | grep -E "SHA1:|SHA256:"
+
+      - name: Build signed debug APK
         run: flutter build apk --debug
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: travel-expense-step1-apk
+          name: travel-expense-step2-signed-apk
           path: build/app/outputs/flutter-apk/app-debug.apk
           if-no-files-found: error
           retention-days: 14
