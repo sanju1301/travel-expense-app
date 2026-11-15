@@ -2,11 +2,14 @@ name: Build Flutter Web
 
 on:
   workflow_dispatch:
+
   push:
-    branches: [main]
+    branches:
+      - main
     paths:
       - "lib/**"
       - "web/**"
+      - "config/**"
       - "pubspec.yaml"
       - ".github/workflows/build-web.yml"
 
@@ -17,14 +20,25 @@ jobs:
   build-web:
     runs-on: ubuntu-latest
     timeout-minutes: 30
+
     steps:
-      - uses: actions/checkout@v4
-      - uses: subosito/flutter-action@v2
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
         with:
           channel: stable
           cache: true
+
       - name: Generate web platform
-        run: flutter create --platforms=web --org com.sanjay --project-name travel_expense .
+        run: >
+          flutter create
+          --platforms=web
+          --org com.sanjay
+          --project-name travel_expense
+          .
+
       - name: Create Supabase configuration
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
@@ -32,7 +46,12 @@ jobs:
         run: |
           test -n "${SUPABASE_URL}"
           test -n "${SUPABASE_PUBLISHABLE_KEY}"
-          printf "const supabaseUrl='%s';\nconst supabasePublishableKey='%s';\n" "${SUPABASE_URL}" "${SUPABASE_PUBLISHABLE_KEY}" > lib/supabase_config.dart
+
+          printf "const supabaseUrl='%s';\nconst supabasePublishableKey='%s';\n" \
+            "${SUPABASE_URL}" \
+            "${SUPABASE_PUBLISHABLE_KEY}" \
+            > lib/supabase_config.dart
+
       - name: Create Firebase Web configuration
         env:
           API_KEY: ${{ secrets.FIREBASE_WEB_API_KEY }}
@@ -45,8 +64,12 @@ jobs:
           test -n "${API_KEY}"
           test -n "${APP_ID}"
           test -n "${SENDER_ID}"
+          test -n "${PROJECT_ID}"
+          test -n "${AUTH_DOMAIN}"
+
           cat > lib/firebase_web_config.dart <<EOF
           import 'package:firebase_core/firebase_core.dart';
+
           const firebaseWebOptions = FirebaseOptions(
             apiKey: '${API_KEY}',
             appId: '${APP_ID}',
@@ -56,16 +79,66 @@ jobs:
             storageBucket: '${STORAGE_BUCKET}',
           );
           EOF
-      - run: flutter pub get
-      - run: flutter analyze --no-fatal-infos
-      - run: flutter build web --release
+
+      - name: Install Flutter dependencies
+        run: flutter pub get
+
+      - name: Analyze Flutter project
+        run: flutter analyze --no-fatal-infos
+
+      - name: Build Flutter Web without offline cache
+        run: flutter build web --release --pwa-strategy=none
+
+      - name: Remove Flutter service-worker cache
+        run: |
+          rm -f build/web/flutter_service_worker.js
+          rm -f build/web/version.json
+
+          python3 <<'PY'
+          from pathlib import Path
+
+          index_path = Path("build/web/index.html")
+          text = index_path.read_text(encoding="utf-8")
+
+          old_script = '<script src="flutter_bootstrap.js" async></script>'
+          new_script = '<script src="flutter_bootstrap.js?v=8" async></script>'
+
+          if old_script in text:
+              text = text.replace(old_script, new_script)
+          elif "flutter_bootstrap.js?v=8" not in text:
+              raise SystemExit(
+                  "flutter_bootstrap.js script tag was not found in index.html"
+              )
+
+          index_path.write_text(text, encoding="utf-8")
+          print("Flutter service-worker cache disabled.")
+          PY
+
       - name: Add announcement and branded icons
         run: |
           mkdir -p build/web/config build/web/icons
           cp config/announcement.json build/web/config/announcement.json
           cp web/favicon.png build/web/favicon.png
           cp web/icons/* build/web/icons/
-      - uses: actions/upload-artifact@v4
+
+      - name: Verify generated web package
+        run: |
+          test -f build/web/index.html
+          test -f build/web/main.dart.js
+          test -f build/web/config/announcement.json
+          test -d build/web/assets
+          test -d build/web/icons
+
+          if [ -f build/web/flutter_service_worker.js ]; then
+            echo "flutter_service_worker.js still exists."
+            exit 1
+          fi
+
+          grep -F "flutter_bootstrap.js?v=8" build/web/index.html
+          echo "Web package verified without offline cache."
+
+      - name: Upload web artifact
+        uses: actions/upload-artifact@v4
         with:
           name: travel-expense-web
           path: build/web
