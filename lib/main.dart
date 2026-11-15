@@ -1,237 +1,154 @@
+import 'dart:ui';
+import 'package:firebase_auth/firebase_auth.dart';
+import 'package:firebase_core/firebase_core.dart';
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
+import 'package:google_sign_in/google_sign_in.dart';
 
-void main() => runApp(const TravelExpenseApp());
+Future<void> main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+  await Firebase.initializeApp();
+  await GoogleSignIn.instance.initialize();
+  runApp(const ExpenseApp());
+}
 
-class TravelExpenseApp extends StatelessWidget {
-  const TravelExpenseApp({super.key});
-
+class ExpenseApp extends StatelessWidget {
+  const ExpenseApp({super.key});
   @override
-  Widget build(BuildContext context) {
-    const seed = Color(0xFF2563EB);
-    return MaterialApp(
-      debugShowCheckedModeBanner: false,
-      title: 'Travel Expense',
-      themeMode: ThemeMode.system,
-      theme: ThemeData(
-        colorScheme: ColorScheme.fromSeed(seedColor: seed, brightness: Brightness.light),
-        useMaterial3: true,
-        scaffoldBackgroundColor: const Color(0xFFF5F7FB),
-        cardTheme: const CardThemeData(elevation: 0, margin: EdgeInsets.zero),
-        inputDecorationTheme: const InputDecorationTheme(
-          border: OutlineInputBorder(borderRadius: BorderRadius.all(Radius.circular(14))),
-        ),
+  Widget build(BuildContext context) => MaterialApp(
+    debugShowCheckedModeBanner: false,
+    title: 'Travel Expense',
+    themeMode: ThemeMode.dark,
+    darkTheme: ThemeData(
+      brightness: Brightness.dark,
+      scaffoldBackgroundColor: const Color(0xff070a10),
+      colorScheme: ColorScheme.fromSeed(seedColor: const Color(0xff6ea8ff), brightness: Brightness.dark),
+      useMaterial3: true,
+      inputDecorationTheme: InputDecorationTheme(
+        filled: true, fillColor: Colors.white.withValues(alpha: .06),
+        border: OutlineInputBorder(borderRadius: BorderRadius.circular(16), borderSide: BorderSide.none),
       ),
-      darkTheme: ThemeData(
-        colorScheme: ColorScheme.fromSeed(seedColor: seed, brightness: Brightness.dark),
-        useMaterial3: true,
-        cardTheme: const CardThemeData(elevation: 0, margin: EdgeInsets.zero),
-        inputDecorationTheme: const InputDecorationTheme(
-          border: OutlineInputBorder(borderRadius: BorderRadius.all(Radius.circular(14))),
-        ),
-      ),
-      home: const AppShell(),
-    );
+    ),
+    home: const AuthGate(),
+  );
+}
+
+class AuthGate extends StatelessWidget {
+  const AuthGate({super.key});
+  @override
+  Widget build(BuildContext context) => StreamBuilder<User?>(
+    stream: FirebaseAuth.instance.authStateChanges(),
+    builder: (_, snap) {
+      if (snap.connectionState == ConnectionState.waiting) {
+        return const Scaffold(body: Center(child: CupertinoActivityIndicator()));
+      }
+      return snap.data == null ? const LoginPage() : HomeShell(user: snap.data!);
+    },
+  );
+}
+
+class LoginPage extends StatefulWidget {
+  const LoginPage({super.key});
+  @override State<LoginPage> createState() => _LoginPageState();
+}
+class _LoginPageState extends State<LoginPage> {
+  bool busy = false; String? error;
+  Future<void> login() async {
+    setState(() { busy = true; error = null; });
+    try {
+      final account = await GoogleSignIn.instance.authenticate();
+      final auth = account.authentication;
+      await FirebaseAuth.instance.signInWithCredential(GoogleAuthProvider.credential(idToken: auth.idToken));
+    } on GoogleSignInException catch (e) {
+      if (e.code != GoogleSignInExceptionCode.canceled && mounted) setState(() => error = e.description ?? 'Google sign-in failed');
+    } on FirebaseAuthException catch (e) {
+      if (mounted) setState(() => error = e.message ?? e.code);
+    } finally { if (mounted) setState(() => busy = false); }
   }
-}
-
-class AppShell extends StatefulWidget {
-  const AppShell({super.key});
   @override
-  State<AppShell> createState() => _AppShellState();
+  Widget build(BuildContext context) => Scaffold(body: Stack(children: [
+    const Positioned.fill(child: DecoratedBox(decoration: BoxDecoration(gradient: RadialGradient(center: Alignment(-.8,-.8), radius: 1.5, colors: [Color(0xff1b3157), Color(0xff070a10), Color(0xff070a10)])))),
+    SafeArea(child: Padding(padding: const EdgeInsets.all(24), child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+      const Spacer(),
+      Container(width: 76, height: 76, alignment: Alignment.center, decoration: BoxDecoration(gradient: const LinearGradient(colors: [Color(0xff78afff), Color(0xff9b7bff)]), borderRadius: BorderRadius.circular(24)), child: const Icon(CupertinoIcons.doc_text_viewfinder, size: 38)),
+      const SizedBox(height: 24),
+      const Text('Every bill.\nOne trip at a time.', style: TextStyle(fontSize: 40, height: 1.05, fontWeight: FontWeight.w900)),
+      const SizedBox(height: 14),
+      const Text('Capture receipts during travel and keep every expense inside the right trip.', style: TextStyle(fontSize: 17, color: Colors.white70, height: 1.45)),
+      const Spacer(),
+      if (error != null) Padding(padding: const EdgeInsets.only(bottom: 12), child: Text(error!, textAlign: TextAlign.center, style: const TextStyle(color: Color(0xffff8a8a)))),
+      FilledButton.icon(onPressed: busy ? null : login, icon: busy ? const SizedBox(width:18,height:18,child:CircularProgressIndicator(strokeWidth:2)) : const Icon(CupertinoIcons.person_crop_circle_badge_checkmark), label: Padding(padding: const EdgeInsets.symmetric(vertical: 16), child: Text(busy ? 'Signing in...' : 'Continue with Google'))),
+      const SizedBox(height: 14), const Text('Your expenses stay private inside your account.', textAlign: TextAlign.center, style: TextStyle(color: Colors.white54, fontSize: 12)),
+    ])))
+  ]));
 }
 
-class _AppShellState extends State<AppShell> {
+class HomeShell extends StatefulWidget {
+  const HomeShell({required this.user, super.key}); final User user;
+  @override State<HomeShell> createState() => _HomeShellState();
+}
+class _HomeShellState extends State<HomeShell> {
   int index = 0;
-  final pages = const [DashboardPage(), ExpensesPage(), AddExpensePage(), ProfilePage()];
-
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      body: SafeArea(child: IndexedStack(index: index, children: pages)),
-      bottomNavigationBar: NavigationBar(
-        selectedIndex: index,
-        onDestinationSelected: (value) => setState(() => index = value),
-        destinations: const [
-          NavigationDestination(icon: Icon(CupertinoIcons.house), selectedIcon: Icon(CupertinoIcons.house_fill), label: 'Home'),
-          NavigationDestination(icon: Icon(CupertinoIcons.doc_text), selectedIcon: Icon(CupertinoIcons.doc_text_fill), label: 'Expenses'),
-          NavigationDestination(icon: Icon(CupertinoIcons.camera), selectedIcon: Icon(CupertinoIcons.camera_fill), label: 'Add'),
-          NavigationDestination(icon: Icon(CupertinoIcons.person), selectedIcon: Icon(CupertinoIcons.person_fill), label: 'Profile'),
-        ],
-      ),
-    );
+  @override Widget build(BuildContext context) {
+    Widget page = switch(index) { 0 => const TripsPage(), 1 => const BillsPage(), 2 => const AddBillPage(), _ => ProfilePage(user: widget.user) };
+    return Scaffold(extendBody:true, body: KeyedSubtree(key: ValueKey(index), child: page), bottomNavigationBar: SafeArea(top:false, child: Padding(padding: const EdgeInsets.fromLTRB(14,0,14,10), child: ClipRRect(borderRadius: BorderRadius.circular(24), child: BackdropFilter(filter: ImageFilter.blur(sigmaX:16,sigmaY:16), child: NavigationBar(backgroundColor: const Color(0xcc121722), selectedIndex:index, onDestinationSelected:(v)=>setState(()=>index=v), destinations: const [
+      NavigationDestination(icon:Icon(CupertinoIcons.map),selectedIcon:Icon(CupertinoIcons.map_fill),label:'Trips'),
+      NavigationDestination(icon:Icon(CupertinoIcons.doc_text),selectedIcon:Icon(CupertinoIcons.doc_text_fill),label:'Bills'),
+      NavigationDestination(icon:Icon(CupertinoIcons.camera),selectedIcon:Icon(CupertinoIcons.camera_fill),label:'Add'),
+      NavigationDestination(icon:Icon(CupertinoIcons.person),selectedIcon:Icon(CupertinoIcons.person_fill),label:'Profile'),
+    ]))))));
   }
 }
 
-class PageFrame extends StatelessWidget {
-  const PageFrame({required this.title, required this.child, this.subtitle, super.key});
-  final String title;
-  final String? subtitle;
-  final Widget child;
-  @override
-  Widget build(BuildContext context) => CustomScrollView(slivers: [
-        SliverAppBar.large(
-          pinned: true,
-          title: Text(title),
-          actions: [IconButton(onPressed: () {}, icon: const Icon(CupertinoIcons.bell))],
-        ),
-        SliverPadding(
-          padding: const EdgeInsets.fromLTRB(16, 4, 16, 28),
-          sliver: SliverList.list(children: [
-            if (subtitle != null) ...[
-              Text(subtitle!, style: Theme.of(context).textTheme.bodyLarge?.copyWith(color: Theme.of(context).colorScheme.onSurfaceVariant)),
-              const SizedBox(height: 18),
-            ],
-            child,
-          ]),
-        ),
-      ]);
+class PageList extends StatelessWidget {
+  const PageList({required this.title, required this.children, this.action, super.key});
+  final String title; final List<Widget> children; final Widget? action;
+  @override Widget build(BuildContext context) => CustomScrollView(slivers:[
+    SliverAppBar.large(pinned:true,title:Text(title),backgroundColor:const Color(0xeb070a10),actions:action == null ? null : [action!]),
+    SliverPadding(padding:const EdgeInsets.fromLTRB(16,8,16,110),sliver:SliverList.list(children:children))
+  ]);
+}
+class GlassCard extends StatelessWidget {
+  const GlassCard({required this.child, this.padding=const EdgeInsets.all(18), super.key}); final Widget child; final EdgeInsets padding;
+  @override Widget build(BuildContext context) => Container(padding:padding,decoration:BoxDecoration(color:Colors.white.withValues(alpha:.06),borderRadius:BorderRadius.circular(22),border:Border.all(color:Colors.white.withValues(alpha:.09))),child:child);
 }
 
-class DashboardPage extends StatelessWidget {
-  const DashboardPage({super.key});
-  @override
-  Widget build(BuildContext context) => PageFrame(
-        title: 'Good afternoon',
-        subtitle: 'Your travel expenses at a glance',
-        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          Card(
-            color: Theme.of(context).colorScheme.primary,
-            child: Padding(
-              padding: const EdgeInsets.all(22),
-              child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                Text('November total', style: TextStyle(color: Theme.of(context).colorScheme.onPrimary.withValues(alpha: .8))),
-                const SizedBox(height: 8),
-                Text('₹12,480.00', style: Theme.of(context).textTheme.headlineMedium?.copyWith(color: Theme.of(context).colorScheme.onPrimary, fontWeight: FontWeight.w700)),
-                const SizedBox(height: 18),
-                Row(children: [
-                  _pill(context, '8 bills'),
-                  const SizedBox(width: 8),
-                  _pill(context, '2 pending'),
-                ]),
-              ]),
-            ),
-          ),
-          const SizedBox(height: 24),
-          Text('Recent expenses', style: Theme.of(context).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w700)),
-          const SizedBox(height: 12),
-          const ExpenseTile(merchant: 'ABC Components', meta: 'Meals • Today, 1:30 PM', amount: '₹845.50', icon: CupertinoIcons.cart),
-          const SizedBox(height: 10),
-          const ExpenseTile(merchant: 'City Taxi', meta: 'Transport • Yesterday', amount: '₹1,280.00', icon: CupertinoIcons.car_detailed),
-          const SizedBox(height: 10),
-          const ExpenseTile(merchant: 'Grand Business Hotel', meta: 'Hotel • 12 Nov', amount: '₹8,950.00', icon: CupertinoIcons.building_2_fill),
-        ]),
-      );
+class Trip { const Trip(this.name,this.place,this.dates,this.total,this.count,this.active); final String name,place,dates,total; final int count; final bool active; }
+const trips=[Trip('Pune Office Visit','Pune, Maharashtra','15-18 Nov','Rs 12,480',8,true),Trip('Chennai Weekend','Chennai, Tamil Nadu','22-24 Nov','Rs 4,260',4,true),Trip('Germany Travel','Munich, Germany','04-11 Oct','EUR 1,842',12,false)];
+class Bill { const Bill(this.name,this.meta,this.amount,this.color); final String name,meta,amount; final Color color; }
+const bills=[Bill('Grand Business Hotel','Hotel - 15 Nov','Rs 8,950',Color(0xff324c72)),Bill('City Taxi','Transport - 15 Nov','Rs 1,280',Color(0xff294b41)),Bill('Restaurant','Meals - 16 Nov','Rs 845',Color(0xff5a3d52))];
 
-  Widget _pill(BuildContext context, String label) => Container(
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
-        decoration: BoxDecoration(color: Theme.of(context).colorScheme.onPrimary.withValues(alpha: .14), borderRadius: BorderRadius.circular(99)),
-        child: Text(label, style: TextStyle(color: Theme.of(context).colorScheme.onPrimary, fontWeight: FontWeight.w600)),
-      );
+class TripsPage extends StatelessWidget {
+  const TripsPage({super.key});
+  @override Widget build(BuildContext context) => PageList(title:'Trips',action:IconButton(onPressed:()=>Navigator.push(context,MaterialPageRoute(builder:(_)=>const NewTripPage())),icon:const Icon(CupertinoIcons.add)),children:[
+    GlassCard(child:Row(children:[const Expanded(child:Column(crossAxisAlignment:CrossAxisAlignment.start,children:[Text('Ready for a new journey?',style:TextStyle(fontSize:20,fontWeight:FontWeight.w900)),SizedBox(height:6),Text('Create a trip, then keep every bill together.',style:TextStyle(color:Colors.white60))])),const SizedBox(width:12),FilledButton(onPressed:()=>Navigator.push(context,MaterialPageRoute(builder:(_)=>const NewTripPage())),child:const Text('New trip'))])),
+    const SizedBox(height:24),const Text('Active',style:TextStyle(fontSize:21,fontWeight:FontWeight.w900)),const SizedBox(height:12),
+    ...trips.map((t)=>Padding(padding:const EdgeInsets.only(bottom:12),child:TripCard(trip:t))),
+  ]);
 }
-
-class ExpensesPage extends StatelessWidget {
-  const ExpensesPage({super.key});
-  @override
-  Widget build(BuildContext context) => PageFrame(
-        title: 'Expenses',
-        child: Column(children: [
-          const TextField(decoration: InputDecoration(hintText: 'Search merchant or bill', prefixIcon: Icon(CupertinoIcons.search))),
-          const SizedBox(height: 14),
-          SingleChildScrollView(scrollDirection: Axis.horizontal, child: Row(children: ['All', 'Meals', 'Transport', 'Hotel'].map((e) => Padding(padding: const EdgeInsets.only(right: 8), child: FilterChip(label: Text(e), selected: e == 'All', onSelected: (_) {}))).toList())),
-          const SizedBox(height: 18),
-          const ExpenseTile(merchant: 'ABC Components', meta: 'Meals • Today, 1:30 PM', amount: '₹845.50', icon: CupertinoIcons.cart),
-          const SizedBox(height: 10),
-          const ExpenseTile(merchant: 'City Taxi', meta: 'Transport • Yesterday', amount: '₹1,280.00', icon: CupertinoIcons.car_detailed),
-          const SizedBox(height: 10),
-          const ExpenseTile(merchant: 'Grand Business Hotel', meta: 'Hotel • 12 Nov', amount: '₹8,950.00', icon: CupertinoIcons.building_2_fill),
-        ]),
-      );
+class TripCard extends StatelessWidget {
+  const TripCard({required this.trip,super.key}); final Trip trip;
+  @override Widget build(BuildContext context) => InkWell(borderRadius:BorderRadius.circular(22),onTap:()=>Navigator.push(context,MaterialPageRoute(builder:(_)=>TripDetailPage(trip:trip))),child:GlassCard(child:Column(children:[
+    Row(children:[Container(width:48,height:48,decoration:BoxDecoration(gradient:const LinearGradient(colors:[Color(0xff4f8cff),Color(0xff8b5cf6)]),borderRadius:BorderRadius.circular(16)),child:const Icon(CupertinoIcons.airplane)),const SizedBox(width:14),Expanded(child:Column(crossAxisAlignment:CrossAxisAlignment.start,children:[Text(trip.name,style:const TextStyle(fontSize:17,fontWeight:FontWeight.w900)),Text(trip.place,style:const TextStyle(color:Colors.white60))])),const Icon(CupertinoIcons.chevron_right,size:16)]),
+    const SizedBox(height:18),Row(children:[Text(trip.dates,style:const TextStyle(color:Colors.white60)),const Spacer(),Text(trip.total,style:const TextStyle(fontSize:18,fontWeight:FontWeight.w900))]),const SizedBox(height:12),Row(children:[const Icon(CupertinoIcons.doc_text,size:17,color:Color(0xff90baff)),const SizedBox(width:8),Text('${trip.count} bills'),const Spacer(),Text(trip.active?'Active':'Completed',style:TextStyle(color:trip.active?const Color(0xff72e7b4):Colors.white60,fontWeight:FontWeight.w700))])
+  ])));
 }
-
-class ExpenseTile extends StatelessWidget {
-  const ExpenseTile({required this.merchant, required this.meta, required this.amount, required this.icon, super.key});
-  final String merchant, meta, amount;
-  final IconData icon;
-  @override
-  Widget build(BuildContext context) => Card(
-        child: ListTile(
-          contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-          leading: Container(width: 46, height: 46, decoration: BoxDecoration(color: Theme.of(context).colorScheme.primaryContainer, borderRadius: BorderRadius.circular(14)), child: Icon(icon, color: Theme.of(context).colorScheme.primary)),
-          title: Text(merchant, style: const TextStyle(fontWeight: FontWeight.w700)),
-          subtitle: Text(meta),
-          trailing: Text(amount, style: const TextStyle(fontWeight: FontWeight.w700)),
-        ),
-      );
+class TripDetailPage extends StatelessWidget {
+  const TripDetailPage({required this.trip,super.key}); final Trip trip;
+  @override Widget build(BuildContext context)=>Scaffold(appBar:AppBar(title:Text(trip.name)),floatingActionButton:FloatingActionButton.extended(onPressed:()=>Navigator.push(context,MaterialPageRoute(builder:(_)=>const AddBillPage())),icon:const Icon(CupertinoIcons.camera_fill),label:const Text('Add bill')),body:ListView(padding:const EdgeInsets.fromLTRB(16,8,16,100),children:[
+    GlassCard(child:Column(crossAxisAlignment:CrossAxisAlignment.start,children:[Text(trip.place,style:const TextStyle(color:Colors.white60)),const SizedBox(height:6),Text(trip.total,style:const TextStyle(fontSize:32,fontWeight:FontWeight.w900)),Text('${trip.count} bills - ${trip.dates}',style:const TextStyle(color:Colors.white60))])),const SizedBox(height:22),const Text('Bills',style:TextStyle(fontSize:21,fontWeight:FontWeight.w900)),const SizedBox(height:12),...bills.map((b)=>Padding(padding:const EdgeInsets.only(bottom:10),child:BillTile(bill:b)))
+  ]));
 }
-
-class AddExpensePage extends StatefulWidget {
-  const AddExpensePage({super.key});
-  @override
-  State<AddExpensePage> createState() => _AddExpensePageState();
+class BillTile extends StatelessWidget {
+  const BillTile({required this.bill,super.key});final Bill bill;
+  @override Widget build(BuildContext context)=>InkWell(borderRadius:BorderRadius.circular(20),onTap:()=>Navigator.push(context,MaterialPageRoute(builder:(_)=>BillDetailPage(bill:bill))),child:GlassCard(padding:const EdgeInsets.all(12),child:Row(children:[Container(width:54,height:68,decoration:BoxDecoration(color:bill.color,borderRadius:BorderRadius.circular(12)),child:const Icon(CupertinoIcons.doc_text_viewfinder)),const SizedBox(width:13),Expanded(child:Column(crossAxisAlignment:CrossAxisAlignment.start,children:[Text(bill.name,style:const TextStyle(fontWeight:FontWeight.w900)),Text(bill.meta,style:const TextStyle(color:Colors.white60)),const Text('Synced',style:TextStyle(color:Color(0xff72e7b4),fontSize:12))])),Text(bill.amount,style:const TextStyle(fontWeight:FontWeight.w900)),const Icon(CupertinoIcons.chevron_right,size:14)])));
 }
-
-class _AddExpensePageState extends State<AddExpensePage> {
-  String category = 'Meals';
-  @override
-  Widget build(BuildContext context) => PageFrame(
-        title: 'Add expense',
-        subtitle: 'Capture a bill and add its details',
-        child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-          InkWell(
-            borderRadius: BorderRadius.circular(20),
-            onTap: () => ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Camera integration arrives in Build 4.'))),
-            child: Container(
-              height: 180,
-              decoration: BoxDecoration(border: Border.all(color: Theme.of(context).colorScheme.outlineVariant), borderRadius: BorderRadius.circular(20), color: Theme.of(context).colorScheme.surface),
-              child: const Column(mainAxisAlignment: MainAxisAlignment.center, children: [Icon(CupertinoIcons.camera_fill, size: 42), SizedBox(height: 12), Text('Tap to photograph bill', style: TextStyle(fontWeight: FontWeight.w700)), SizedBox(height: 4), Text('JPG or PNG • up to 10 MB')]),
-            ),
-          ),
-          const SizedBox(height: 18),
-          const TextField(decoration: InputDecoration(labelText: 'Merchant name', prefixIcon: Icon(CupertinoIcons.building_2_fill))),
-          const SizedBox(height: 14),
-          const Row(children: [
-            Expanded(flex: 2, child: TextField(keyboardType: TextInputType.number, decoration: InputDecoration(labelText: 'Amount', prefixText: '₹ '))),
-            SizedBox(width: 12),
-            Expanded(child: TextField(decoration: InputDecoration(labelText: 'Currency', hintText: 'INR'))),
-          ]),
-          const SizedBox(height: 14),
-          DropdownButtonFormField<String>(
-            initialValue: category,
-            decoration: const InputDecoration(labelText: 'Category'),
-            items: ['Meals', 'Transport', 'Hotel', 'Fuel', 'Other'].map((e) => DropdownMenuItem(value: e, child: Text(e))).toList(),
-            onChanged: (value) => setState(() => category = value ?? category),
-          ),
-          const SizedBox(height: 14),
-          const TextField(maxLines: 3, decoration: InputDecoration(labelText: 'Notes', alignLabelWithHint: true)),
-          const SizedBox(height: 20),
-          FilledButton.icon(
-            onPressed: () => ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Demo saved locally for the UI preview.'))),
-            icon: const Icon(CupertinoIcons.check_mark),
-            label: const Padding(padding: EdgeInsets.symmetric(vertical: 14), child: Text('Save expense')),
-          ),
-        ]),
-      );
+class BillDetailPage extends StatelessWidget {
+  const BillDetailPage({required this.bill,super.key});final Bill bill;
+  @override Widget build(BuildContext context)=>Scaffold(appBar:AppBar(title:const Text('Bill details')),body:ListView(padding:const EdgeInsets.all(16),children:[Container(height:300,decoration:BoxDecoration(color:bill.color,borderRadius:BorderRadius.circular(24)),child:const Column(mainAxisAlignment:MainAxisAlignment.center,children:[Icon(CupertinoIcons.doc_text_viewfinder,size:58),SizedBox(height:12),Text('Receipt preview',style:TextStyle(fontWeight:FontWeight.w900)),Text('Camera upload comes next',style:TextStyle(color:Colors.white60))])),const SizedBox(height:18),GlassCard(child:Column(crossAxisAlignment:CrossAxisAlignment.start,children:[Text(bill.name,style:const TextStyle(fontSize:22,fontWeight:FontWeight.w900)),Text(bill.meta,style:const TextStyle(color:Colors.white60)),const SizedBox(height:16),Text(bill.amount,style:const TextStyle(fontSize:32,fontWeight:FontWeight.w900))]))]));
 }
-
-class ProfilePage extends StatelessWidget {
-  const ProfilePage({super.key});
-  @override
-  Widget build(BuildContext context) => PageFrame(
-        title: 'Profile',
-        child: Column(children: [
-          const CircleAvatar(radius: 42, child: Icon(CupertinoIcons.person_fill, size: 42)),
-          const SizedBox(height: 12),
-          Text('Sumanth', style: Theme.of(context).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w700)),
-          const Text('Demo account • Firebase login in Build 2'),
-          const SizedBox(height: 24),
-          Card(child: Column(children: [
-            ListTile(leading: const Icon(CupertinoIcons.globe), title: const Text('Default currency'), trailing: const Text('INR')),
-            const Divider(height: 1),
-            SwitchListTile(secondary: const Icon(CupertinoIcons.location), title: const Text('Save bill location'), value: true, onChanged: (_) {}),
-            const Divider(height: 1),
-            const ListTile(leading: Icon(CupertinoIcons.info), title: Text('App version'), trailing: Text('0.1.0')),
-          ])),
-        ]),
-      );
-}
+class BillsPage extends StatelessWidget { const BillsPage({super.key}); @override Widget build(BuildContext context)=>PageList(title:'Recent bills',children:[const TextField(decoration:InputDecoration(hintText:'Search bills',prefixIcon:Icon(CupertinoIcons.search))),const SizedBox(height:18),...bills.map((b)=>Padding(padding:const EdgeInsets.only(bottom:10),child:BillTile(bill:b)))]); }
+class NewTripPage extends StatefulWidget { const NewTripPage({super.key}); @override State<NewTripPage> createState()=>_NewTripPageState(); }
+class _NewTripPageState extends State<NewTripPage>{final name=TextEditingController();@override void dispose(){name.dispose();super.dispose();}@override Widget build(BuildContext context)=>Scaffold(appBar:AppBar(title:const Text('New trip')),body:ListView(padding:const EdgeInsets.all(16),children:[TextField(controller:name,decoration:const InputDecoration(labelText:'Trip name *',prefixIcon:Icon(CupertinoIcons.map))),const SizedBox(height:14),const TextField(decoration:InputDecoration(labelText:'Destination (optional)',prefixIcon:Icon(CupertinoIcons.location))),const SizedBox(height:14),const TextField(decoration:InputDecoration(labelText:'Default currency',hintText:'INR')),const SizedBox(height:14),const TextField(maxLines:4,decoration:InputDecoration(labelText:'Notes (optional)')),const SizedBox(height:20),FilledButton(onPressed:(){if(name.text.trim().isEmpty){ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content:Text('Enter a trip name.')));return;}Navigator.pop(context);},child:const Padding(padding:EdgeInsets.symmetric(vertical:16),child:Text('Create trip')))]));}
+class AddBillPage extends StatelessWidget {const AddBillPage({super.key});@override Widget build(BuildContext context)=>PageList(title:'Add bill',children:[Container(height:180,decoration:BoxDecoration(color:Colors.white.withValues(alpha:.06),borderRadius:BorderRadius.circular(22)),child:const Column(mainAxisAlignment:MainAxisAlignment.center,children:[Icon(CupertinoIcons.camera_fill,size:44),Text('Photograph receipt',style:TextStyle(fontWeight:FontWeight.w900)),Text('Camera integration comes next',style:TextStyle(color:Colors.white60))])),const SizedBox(height:16),const TextField(decoration:InputDecoration(labelText:'Merchant')),const SizedBox(height:14),const TextField(keyboardType:TextInputType.number,decoration:InputDecoration(labelText:'Amount')),const SizedBox(height:14),const TextField(decoration:InputDecoration(labelText:'Category'))]);}
+class ProfilePage extends StatelessWidget {const ProfilePage({required this.user,super.key});final User user;Future<void> logout()async{await GoogleSignIn.instance.signOut();await FirebaseAuth.instance.signOut();}@override Widget build(BuildContext context)=>PageList(title:'Profile',children:[GlassCard(child:Row(children:[CircleAvatar(radius:32,backgroundImage:user.photoURL==null?null:NetworkImage(user.photoURL!),child:user.photoURL==null?const Icon(CupertinoIcons.person_fill):null),const SizedBox(width:14),Expanded(child:Column(crossAxisAlignment:CrossAxisAlignment.start,children:[Text(user.displayName??'Google user',style:const TextStyle(fontSize:18,fontWeight:FontWeight.w900)),Text(user.email??'',style:const TextStyle(color:Colors.white60))]))])),const SizedBox(height:18),GlassCard(child:ListTile(onTap:logout,leading:const Icon(CupertinoIcons.square_arrow_right,color:Color(0xffff8a8a)),title:const Text('Sign out',style:TextStyle(color:Color(0xffff8a8a)))))]);}
