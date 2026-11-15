@@ -31,7 +31,7 @@ jobs:
           channel: stable
           cache: true
 
-      - name: Show Flutter and Java versions
+      - name: Show environment versions
         run: |
           flutter --version
           java -version
@@ -46,31 +46,28 @@ jobs:
 
       - name: Restore Firebase configuration
         env:
-          GOOGLE_SERVICES_JSON_BASE64: ${{ secrets.GOOGLE_SERVICES_JSON_BASE64 }}
+          FIREBASE_JSON: ${{ secrets.GOOGLE_SERVICES_JSON_BASE64 }}
         run: |
-          if [ -z "$GOOGLE_SERVICES_JSON_BASE64" ]; then
-            echo "GOOGLE_SERVICES_JSON_BASE64 secret is missing."
+          if [ -z "${FIREBASE_JSON}" ]; then
+            echo "GOOGLE_SERVICES_JSON_BASE64 is missing."
             exit 1
           fi
 
-          printf '%s' "$GOOGLE_SERVICES_JSON_BASE64" \
+          printf '%s' "${FIREBASE_JSON}" \
             | base64 --decode \
             > android/app/google-services.json
 
-          if [ ! -s android/app/google-services.json ]; then
-            echo "google-services.json was not restored."
-            exit 1
-          fi
-
+          test -s android/app/google-services.json
           jq empty android/app/google-services.json
 
-          PACKAGE_FOUND=$(jq -r \
+          PACKAGE_NAME=$(jq -r \
             '.client[].client_info.android_client_info.package_name' \
             android/app/google-services.json \
-            | grep -Fx "com.sanjay.travel_expense" || true)
+            | grep -Fx 'com.sanjay.travel_expense' \
+            || true)
 
-          if [ -z "$PACKAGE_FOUND" ]; then
-            echo "google-services.json does not contain:"
+          if [ -z "${PACKAGE_NAME}" ]; then
+            echo "Firebase configuration does not contain:"
             echo "com.sanjay.travel_expense"
             exit 1
           fi
@@ -79,43 +76,254 @@ jobs:
 
       - name: Restore Android signing key
         env:
-          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          KEYSTORE_DATA: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
         run: |
-          if [ -z "$ANDROID_KEYSTORE_BASE64" ]; then
-            echo "ANDROID_KEYSTORE_BASE64 secret is missing."
+          if [ -z "${KEYSTORE_DATA}" ]; then
+            echo "ANDROID_KEYSTORE_BASE64 is missing."
             exit 1
           fi
 
-          printf '%s' "$ANDROID_KEYSTORE_BASE64" \
+          printf '%s' "${KEYSTORE_DATA}" \
             | base64 --decode \
             > android/app/travel-expense-dev.jks
 
-          if [ ! -s android/app/travel-expense-dev.jks ]; then
-            echo "Android signing keystore was not restored."
-            exit 1
-          fi
+          test -s android/app/travel-expense-dev.jks
 
           echo "Android signing key restored successfully."
 
       - name: Verify Android keystore
         env:
-          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
-          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
         run: |
-          if [ -z "$ANDROID_KEYSTORE_PASSWORD" ]; then
-            echo "ANDROID_KEYSTORE_PASSWORD secret is missing."
+          if [ -z "${KEYSTORE_PASSWORD}" ]; then
+            echo "ANDROID_KEYSTORE_PASSWORD is missing."
             exit 1
           fi
 
-          if [ -z "$ANDROID_KEY_ALIAS" ]; then
-            echo "ANDROID_KEY_ALIAS secret is missing."
+          if [ -z "${KEY_ALIAS}" ]; then
+            echo "ANDROID_KEY_ALIAS is missing."
             exit 1
           fi
 
-          keytool -list \
+          keytool -list -v \
             -keystore android/app/travel-expense-dev.jks \
-            -alias "$ANDROID_KEY_ALIAS" \
-            -storepass "$ANDROID_KEYSTORE_PASSWORD" \
-            > /dev/null
+            -alias "${KEY_ALIAS}" \
+            -storepass "${KEYSTORE_PASSWORD}" \
+            > keystore-info.txt
 
-          echo "Android keystore and alias are valid
+          grep -E 'Alias name:|SHA1:|SHA256:' \
+            keystore-info.txt
+
+          echo "Android keystore verified successfully."
+
+      - name: Create signing properties
+        env:
+          KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+        run: |
+          if [ -z "${KEY_PASSWORD}" ]; then
+            echo "ANDROID_KEY_PASSWORD is missing."
+            exit 1
+          fi
+
+          {
+            echo "storePassword=${KEYSTORE_PASSWORD}"
+            echo "keyPassword=${KEY_PASSWORD}"
+            echo "keyAlias=${KEY_ALIAS}"
+            echo "storeFile=travel-expense-dev.jks"
+          } > android/key.properties
+
+          test -s android/key.properties
+
+          echo "Signing properties created successfully."
+
+      - name: Add Google Services plugin
+        run: |
+          python3 -c '
+          from pathlib import Path
+
+          path = Path("android/settings.gradle.kts")
+          text = path.read_text(encoding="utf-8")
+
+          plugin = (
+              "    id(\"com.google.gms.google-services\") "
+              "version \"4.4.4\" apply false\n"
+          )
+
+          if "com.google.gms.google-services" not in text:
+              marker = "plugins {\n"
+
+              if marker not in text:
+                  raise SystemExit(
+                      "plugins block missing from settings.gradle.kts"
+                  )
+
+              text = text.replace(
+                  marker,
+                  marker + plugin,
+                  1,
+              )
+
+          path.write_text(text, encoding="utf-8")
+          '
+
+          grep -n \
+            'com.google.gms.google-services' \
+            android/settings.gradle.kts
+
+      - name: Configure Android application
+        run: |
+          cat > android/app/build.gradle.kts <<'GRADLE'
+          import java.io.FileInputStream
+          import java.util.Properties
+
+          plugins {
+              id("com.android.application")
+              id("kotlin-android")
+              id("dev.flutter.flutter-gradle-plugin")
+              id("com.google.gms.google-services")
+          }
+
+          val keystoreProperties = Properties()
+          val keystorePropertiesFile =
+              rootProject.file("key.properties")
+
+          if (keystorePropertiesFile.exists()) {
+              keystoreProperties.load(
+                  FileInputStream(keystorePropertiesFile)
+              )
+          }
+
+          android {
+              namespace = "com.sanjay.travel_expense"
+              compileSdk = flutter.compileSdkVersion
+              ndkVersion = flutter.ndkVersion
+
+              compileOptions {
+                  sourceCompatibility = JavaVersion.VERSION_17
+                  targetCompatibility = JavaVersion.VERSION_17
+              }
+
+              kotlinOptions {
+                  jvmTarget = JavaVersion.VERSION_17.toString()
+              }
+
+              defaultConfig {
+                  applicationId = "com.sanjay.travel_expense"
+                  minSdk = flutter.minSdkVersion
+                  targetSdk = flutter.targetSdkVersion
+                  versionCode = flutter.versionCode
+                  versionName = flutter.versionName
+              }
+
+              signingConfigs {
+                  create("release") {
+                      keyAlias =
+                          keystoreProperties["keyAlias"] as String
+
+                      keyPassword =
+                          keystoreProperties["keyPassword"] as String
+
+                      storeFile = file(
+                          keystoreProperties["storeFile"] as String
+                      )
+
+                      storePassword =
+                          keystoreProperties["storePassword"] as String
+                  }
+              }
+
+              buildTypes {
+                  getByName("release") {
+                      signingConfig =
+                          signingConfigs.getByName("release")
+
+                      isMinifyEnabled = false
+                      isShrinkResources = false
+                  }
+              }
+          }
+
+          flutter {
+              source = "../.."
+          }
+          GRADLE
+
+          grep -n \
+            'com.google.gms.google-services' \
+            android/app/build.gradle.kts
+
+          grep -n \
+            'signingConfigs.getByName("release")' \
+            android/app/build.gradle.kts
+
+          echo "Android application configured successfully."
+
+      - name: Install Flutter dependencies
+        run: flutter pub get
+
+      - name: Analyze project
+        run: flutter analyze --no-fatal-infos
+
+      - name: Run tests
+        run: flutter test
+
+      - name: Display registered certificate fingerprints
+        env:
+          KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+        run: |
+          keytool -list -v \
+            -keystore android/app/travel-expense-dev.jks \
+            -alias "${KEY_ALIAS}" \
+            -storepass "${KEYSTORE_PASSWORD}" \
+            | grep -E 'SHA1:|SHA256:'
+
+      - name: Build signed release APK
+        run: flutter build apk --release
+
+      - name: Confirm release APK
+        run: |
+          APK_PATH="build/app/outputs/flutter-apk/app-release.apk"
+
+          if [ ! -s "${APK_PATH}" ]; then
+            echo "app-release.apk was not produced."
+            exit 1
+          fi
+
+          ls -lh "${APK_PATH}"
+
+      - name: Find APK signer
+        run: |
+          BUILD_TOOLS_VERSION=$(
+            ls "${ANDROID_HOME}/build-tools" \
+              | sort -V \
+              | tail -1
+          )
+
+          APKSIGNER_PATH="${ANDROID_HOME}/build-tools/${BUILD_TOOLS_VERSION}/apksigner"
+
+          if [ ! -x "${APKSIGNER_PATH}" ]; then
+            echo "Android apksigner was not found."
+            exit 1
+          fi
+
+          echo "APKSIGNER_PATH=${APKSIGNER_PATH}" \
+            >> "${GITHUB_ENV}"
+
+      - name: Verify completed APK certificate
+        run: |
+          "${APKSIGNER_PATH}" verify \
+            --verbose \
+            --print-certs \
+            build/app/outputs/flutter-apk/app-release.apk
+
+      - name: Upload signed release APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: travel-expense-auth-trips-release-apk
+          path: build/app/outputs/flutter-apk/app-release.apk
+          if-no-files-found: error
+          retention-days: 14
