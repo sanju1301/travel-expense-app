@@ -1,5 +1,6 @@
 import 'dart:ui';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
@@ -113,18 +114,32 @@ class GlassCard extends StatelessWidget {
   @override Widget build(BuildContext context) => Container(padding:padding,decoration:BoxDecoration(color:Colors.white.withValues(alpha:.06),borderRadius:BorderRadius.circular(22),border:Border.all(color:Colors.white.withValues(alpha:.09))),child:child);
 }
 
-class Trip { const Trip(this.name,this.place,this.dates,this.total,this.count,this.active); final String name,place,dates,total; final int count; final bool active; }
-const trips=[Trip('Pune Office Visit','Pune, Maharashtra','15-18 Nov','Rs 12,480',8,true),Trip('Chennai Weekend','Chennai, Tamil Nadu','22-24 Nov','Rs 4,260',4,true),Trip('Germany Travel','Munich, Germany','04-11 Oct','EUR 1,842',12,false)];
+class Trip { const Trip(this.id,this.name,this.place,this.dates,this.total,this.count,this.active); final String id,name,place,dates,total; final int count; final bool active;
+  factory Trip.fromDoc(DocumentSnapshot<Map<String,dynamic>> doc) { final d=doc.data()??{}; return Trip(doc.id,(d['name']??'Untitled trip').toString(),(d['destination']??'').toString(),(d['dateLabel']??'Dates not set').toString(),(d['totalLabel']??'No expenses').toString(),(d['billCount'] as num?)?.toInt()??0,(d['status']??'active')=='active'); }
+}
 class Bill { const Bill(this.name,this.meta,this.amount,this.color); final String name,meta,amount; final Color color; }
 const bills=[Bill('Grand Business Hotel','Hotel - 15 Nov','Rs 8,950',Color(0xff324c72)),Bill('City Taxi','Transport - 15 Nov','Rs 1,280',Color(0xff294b41)),Bill('Restaurant','Meals - 16 Nov','Rs 845',Color(0xff5a3d52))];
 
 class TripsPage extends StatelessWidget {
   const TripsPage({super.key});
-  @override Widget build(BuildContext context) => PageList(title:'Trips',action:IconButton(onPressed:()=>Navigator.push(context,MaterialPageRoute(builder:(_)=>const NewTripPage())),icon:const Icon(CupertinoIcons.add)),children:[
-    GlassCard(child:Row(children:[const Expanded(child:Column(crossAxisAlignment:CrossAxisAlignment.start,children:[Text('Ready for a new journey?',style:TextStyle(fontSize:20,fontWeight:FontWeight.w900)),SizedBox(height:6),Text('Create a trip, then keep every bill together.',style:TextStyle(color:Colors.white60))])),const SizedBox(width:12),FilledButton(onPressed:()=>Navigator.push(context,MaterialPageRoute(builder:(_)=>const NewTripPage())),child:const Text('New trip'))])),
-    const SizedBox(height:24),const Text('Active',style:TextStyle(fontSize:21,fontWeight:FontWeight.w900)),const SizedBox(height:12),
-    ...trips.map((t)=>Padding(padding:const EdgeInsets.only(bottom:12),child:TripCard(trip:t))),
-  ]);
+  @override Widget build(BuildContext context) {
+    final uid=FirebaseAuth.instance.currentUser!.uid;
+    final query=FirebaseFirestore.instance.collection('users').doc(uid).collection('trips').orderBy('createdAt',descending:true);
+    return StreamBuilder<QuerySnapshot<Map<String,dynamic>>>(
+      stream:query.snapshots(),
+      builder:(context,snap){
+        final action=IconButton(onPressed:()=>Navigator.push(context,MaterialPageRoute(builder:(_)=>const NewTripPage())),icon:const Icon(CupertinoIcons.add));
+        if(snap.hasError){return PageList(title:'Trips',action:action,children:[GlassCard(child:Text('Unable to load trips: ${snap.error}',style:const TextStyle(color:Color(0xffff8a8a))))]);}
+        if(!snap.hasData){return PageList(title:'Trips',action:action,children:const [Center(child:Padding(padding:EdgeInsets.all(40),child:CupertinoActivityIndicator()))]);}
+        final items=snap.data!.docs.map(Trip.fromDoc).toList();
+        return PageList(title:'Trips',action:action,children:[
+          GlassCard(child:Row(children:[const Expanded(child:Column(crossAxisAlignment:CrossAxisAlignment.start,children:[Text('Ready for a new journey?',style:TextStyle(fontSize:20,fontWeight:FontWeight.w900)),SizedBox(height:6),Text('Create a trip, then keep every bill together.',style:TextStyle(color:Colors.white60))])),const SizedBox(width:12),FilledButton(onPressed:()=>Navigator.push(context,MaterialPageRoute(builder:(_)=>const NewTripPage())),child:const Text('New trip'))])),
+          const SizedBox(height:24),
+          if(items.isEmpty) const GlassCard(child:Column(children:[Icon(CupertinoIcons.map,size:44,color:Color(0xff90baff)),SizedBox(height:12),Text('No trips yet',style:TextStyle(fontSize:20,fontWeight:FontWeight.w900)),SizedBox(height:6),Text('Create the first trip to begin saving bills.',style:TextStyle(color:Colors.white60))])) else ...items.map((t)=>Padding(padding:const EdgeInsets.only(bottom:12),child:TripCard(trip:t))),
+        ]);
+      },
+    );
+  }
 }
 class TripCard extends StatelessWidget {
   const TripCard({required this.trip,super.key}); final Trip trip;
@@ -149,6 +164,11 @@ class BillDetailPage extends StatelessWidget {
 }
 class BillsPage extends StatelessWidget { const BillsPage({super.key}); @override Widget build(BuildContext context)=>PageList(title:'Recent bills',children:[const TextField(decoration:InputDecoration(hintText:'Search bills',prefixIcon:Icon(CupertinoIcons.search))),const SizedBox(height:18),...bills.map((b)=>Padding(padding:const EdgeInsets.only(bottom:10),child:BillTile(bill:b)))]); }
 class NewTripPage extends StatefulWidget { const NewTripPage({super.key}); @override State<NewTripPage> createState()=>_NewTripPageState(); }
-class _NewTripPageState extends State<NewTripPage>{final name=TextEditingController();@override void dispose(){name.dispose();super.dispose();}@override Widget build(BuildContext context)=>Scaffold(appBar:AppBar(title:const Text('New trip')),body:ListView(padding:const EdgeInsets.all(16),children:[TextField(controller:name,decoration:const InputDecoration(labelText:'Trip name *',prefixIcon:Icon(CupertinoIcons.map))),const SizedBox(height:14),const TextField(decoration:InputDecoration(labelText:'Destination (optional)',prefixIcon:Icon(CupertinoIcons.location))),const SizedBox(height:14),const TextField(decoration:InputDecoration(labelText:'Default currency',hintText:'INR')),const SizedBox(height:14),const TextField(maxLines:4,decoration:InputDecoration(labelText:'Notes (optional)')),const SizedBox(height:20),FilledButton(onPressed:(){if(name.text.trim().isEmpty){ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content:Text('Enter a trip name.')));return;}Navigator.pop(context);},child:const Padding(padding:EdgeInsets.symmetric(vertical:16),child:Text('Create trip')))]));}
+class _NewTripPageState extends State<NewTripPage>{
+  final name=TextEditingController(); final destination=TextEditingController(); final currency=TextEditingController(text:'INR'); final notes=TextEditingController(); bool saving=false;
+  @override void dispose(){name.dispose();destination.dispose();currency.dispose();notes.dispose();super.dispose();}
+  Future<void> save() async { if(name.text.trim().isEmpty){ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content:Text('Enter a trip name.')));return;} setState(()=>saving=true); try { final user=FirebaseAuth.instance.currentUser!; final db=FirebaseFirestore.instance; await db.collection('users').doc(user.uid).set({'displayName':user.displayName,'email':user.email,'photoUrl':user.photoURL,'updatedAt':FieldValue.serverTimestamp()},SetOptions(merge:true)); await db.collection('users').doc(user.uid).collection('trips').add({'name':name.text.trim(),'destination':destination.text.trim(),'defaultCurrency':currency.text.trim().toUpperCase().isEmpty?'INR':currency.text.trim().toUpperCase(),'notes':notes.text.trim(),'status':'active','billCount':0,'totalMinor':0,'totalLabel':'No expenses','dateLabel':'Dates not set','createdAt':FieldValue.serverTimestamp(),'updatedAt':FieldValue.serverTimestamp()}); if(mounted) Navigator.pop(context); } on FirebaseException catch(e){if(mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content:Text(e.message??e.code)));} finally {if(mounted)setState(()=>saving=false);} }
+  @override Widget build(BuildContext context)=>Scaffold(appBar:AppBar(title:const Text('New trip')),body:ListView(padding:const EdgeInsets.all(16),children:[TextField(controller:name,decoration:const InputDecoration(labelText:'Trip name *',prefixIcon:Icon(CupertinoIcons.map))),const SizedBox(height:14),TextField(controller:destination,decoration:const InputDecoration(labelText:'Destination (optional)',prefixIcon:Icon(CupertinoIcons.location))),const SizedBox(height:14),TextField(controller:currency,decoration:const InputDecoration(labelText:'Default currency',hintText:'INR')),const SizedBox(height:14),TextField(controller:notes,maxLines:4,decoration:const InputDecoration(labelText:'Notes (optional)')),const SizedBox(height:20),FilledButton(onPressed:saving?null:save,child:Padding(padding:const EdgeInsets.symmetric(vertical:16),child:Text(saving?'Creating...':'Create trip')))]));
+}
 class AddBillPage extends StatelessWidget {const AddBillPage({super.key});@override Widget build(BuildContext context)=>PageList(title:'Add bill',children:[Container(height:180,decoration:BoxDecoration(color:Colors.white.withValues(alpha:.06),borderRadius:BorderRadius.circular(22)),child:const Column(mainAxisAlignment:MainAxisAlignment.center,children:[Icon(CupertinoIcons.camera_fill,size:44),Text('Photograph receipt',style:TextStyle(fontWeight:FontWeight.w900)),Text('Camera integration comes next',style:TextStyle(color:Colors.white60))])),const SizedBox(height:16),const TextField(decoration:InputDecoration(labelText:'Merchant')),const SizedBox(height:14),const TextField(keyboardType:TextInputType.number,decoration:InputDecoration(labelText:'Amount')),const SizedBox(height:14),const TextField(decoration:InputDecoration(labelText:'Category'))]);}
 class ProfilePage extends StatelessWidget {const ProfilePage({required this.user,super.key});final User user;Future<void> logout()async{await GoogleSignIn.instance.signOut();await FirebaseAuth.instance.signOut();}@override Widget build(BuildContext context)=>PageList(title:'Profile',children:[GlassCard(child:Row(children:[CircleAvatar(radius:32,backgroundImage:user.photoURL==null?null:NetworkImage(user.photoURL!),child:user.photoURL==null?const Icon(CupertinoIcons.person_fill):null),const SizedBox(width:14),Expanded(child:Column(crossAxisAlignment:CrossAxisAlignment.start,children:[Text(user.displayName??'Google user',style:const TextStyle(fontSize:18,fontWeight:FontWeight.w900)),Text(user.email??'',style:const TextStyle(color:Colors.white60))]))])),const SizedBox(height:18),GlassCard(child:ListTile(onTap:logout,leading:const Icon(CupertinoIcons.square_arrow_right,color:Color(0xffff8a8a)),title:const Text('Sign out',style:TextStyle(color:Color(0xffff8a8a)))))]);}
