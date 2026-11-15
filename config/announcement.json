@@ -1,0 +1,11 @@
+{
+  "enabled": true,
+  "id": "launch-2026-11-15",
+  "title": "Travel Expense is ready",
+  "message": "Capture bill photographs on mobile, review trips on the web, and download reimbursement receipts securely.",
+  "publishedAt": "2026-11-15T20:45:00+05:30",
+  "severity": "success",
+  "minimumAppVersion": "0.6.0",
+  "actionText": "",
+  "actionUrl": ""
+}
